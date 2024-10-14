@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+venv
+myenv
+.vscode
+
+log
+data
+bak
+
+# 包含用户名信息，不适合提交
+mapping.json 
+# 包含服务器信息，不适合提交
+hosts.yml

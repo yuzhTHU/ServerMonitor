@@ -1,0 +1,87 @@
+body {
+    background-color: #f4f4f4;
+    color: #333;
+    font-family: 'Arial', sans-serif;
+}
+h1 {
+    text-align: center;
+    margin: 20px 0;
+}
+.tab-content {
+    margin-top: 20px;
+}
+.card {
+    margin: 20px;
+    /* min-width: 300px; 设置每个卡片的最小宽度 */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.hbar {
+    height: 20px;
+    border-radius: 5px;
+    margin: 5px 0;
+}
+.cuda-container {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+}
+.cuda-box {
+    width: 30px;                   /* 矩形宽度 */
+    height: 30px;                  /* 矩形高度 */
+    background-color: black;     /* 矩形背景颜色 */
+    display: flex;                 /* 启用 Flexbox */
+    justify-content: center;       /* 水平居中 */
+    align-items: center;           /* 垂直居中 */
+    border-radius: 15px;           /* 可选，圆角效果 */
+    color: white;                  /* 文本颜色 */
+    font-size: 10px;               /* 文本大小 */
+    margin-right: 5px;
+    margin-top: 5px;
+    margin-bottom: 5px;
+}
+.cuda-text {
+    font-size: small;
+    /* color: white; */
+    /* align-items:bottom; */
+    /* mix-blend-mode: difference; 使文字与背景混合，深色背景时显示为白色 */
+}
+.timestamp {
+    font-size: small;
+    color: #b2bec3;
+    text-align: center;
+}
+.user-data-table-container {
+    margin-bottom: 10px;
+    background-color: #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+.table-responsive {
+    overflow-x: auto;
+    white-space: nowrap;
+}
+.user-data-table th, .user-data-table td {
+    white-space: nowrap;
+    background-color: #f4f4f4;
+    width: 100px; /* 固定每个单元格的宽度 */
+    border: none; /* 隐藏竖线 */
+    text-align: center;
+}
+.user-data-table th:first-child, .user-data-table td:first-child {
+    position: sticky;
+    left: 0;
+    font-weight: bold;
+    z-index: 2; /* 确保行索引在其他列上方 */
+}
+/* 美化表格的底色 */
+.table-bordered {
+    background-color: #f9f9f9;
+    border-collapse: collapse;
+}
+/* 表头加深颜色，文字加粗 */
+.user-data-table thead th {
+    background-color: #2d3436;
+    color: white;
+    font-weight: bold;
+}
