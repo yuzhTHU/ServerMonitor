@@ -101,14 +101,14 @@ function getTimeAgo(timestamp) {
 }
 
 function colorInterpolate(value) {
-    // return chroma.scale(['green', 'red']).mode('lab').colors(1, ratio)[0];
-    const color1 = '#00b894';
-    const color2 = '#d63031';
-    const ratio = Math.max(0, Math.min(1, value));
-    const r = Math.round((1 - ratio) * parseInt(color1.slice(1, 3), 16) + ratio * parseInt(color2.slice(1, 3), 16));
-    const g = Math.round((1 - ratio) * parseInt(color1.slice(3, 5), 16) + ratio * parseInt(color2.slice(3, 5), 16));
-    const b = Math.round((1 - ratio) * parseInt(color1.slice(5, 7), 16) + ratio * parseInt(color2.slice(5, 7), 16));
-    return `rgb(${r}, ${g}, ${b})`;
+    if (value >= 0.85) return '#d63031';
+    else value = value / 0.85;
+    const mixed = Color.mix('#00b894', '#b2bec3', value, {space: "lch", outspace: "srgb"});
+    const r = Math.min(255, Math.max(0, Math.round(mixed.srgb.r * 255)));
+    const g = Math.min(255, Math.max(0, Math.round(mixed.srgb.g * 255)));
+    const b = Math.min(255, Math.max(0, Math.round(mixed.srgb.b * 255)));
+    const a = `rgb(${r}, ${g}, ${b})`;
+    return a;
 }
 // 自动反白
 function autoContrast(bg_color) {
