@@ -43,10 +43,17 @@ This will create a web server at `http://localhost:8000` that shows the usage of
 
 ## Demo
 
-If you are in the Tsinghua campus, you can access our demo server at [https://monitor.yumeow.site](https://monitor.yumeow.site).![alt text](image.png). We also provide some snapshots of the demo server as follows:
+If you are in the Tsinghua campus, you can access our demo server at [https://monitor.yumeow.site](https://monitor.yumeow.site). We also provide some snapshots of the demo server as follows:
 
 ![dashboard](assets/dashboard.png)
 
 ![history](assets/history.png)
 
 ![summary](assets/summary.png)
+
+
+## TODO
+
+- [ ] Fix the [Dead Gray Zone]() color in the dashboard tab
+- [ ] Add refresh button in the dashboard tab
+- [ ] Improve the speed of showing chart in the history tab
