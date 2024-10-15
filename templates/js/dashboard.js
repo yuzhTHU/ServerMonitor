@@ -1,67 +1,95 @@
 const timers = {}; // Object to store timer IDs for each card
-async function fetchDashboardData() {
-    const response = await fetch('/api/dashboard');
-    const data = await response.json();
+async function fetchDashboardData(init=false) {
+    const records = await fetch('/api/dashboard').then(response => response.json());
     const dashboardCards = document.getElementById('dashboardCards');
-    dashboardCards.innerHTML = '';
+    if (init) { dashboardCards.innerHTML = ''; }
 
-    data.forEach(record => {
+    records.forEach(record => {
         const cardId = record.host.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const card = document.createElement('div');
-        card.className = 'col-md-4';
         const formattedTimestamp = formatTimestamp(record.timestamp);
         const timeAgo = getTimeAgo(record.timestamp);
 
         const mean_cuda = record.cuda ? record.cuda.reduce((s, i) => s + i, 0) / record.cuda.length : 0;
         const sum_cuda = record.cuda_free ? record.cuda_free.reduce((s, i) => s + i, 0) : 0;
-        const max_cuda = record.cuda_free ? Math.max(...record.cuda_free) : 0;
-        const max_idx = record.cuda_free ? record.cuda_free.indexOf(max_cuda) : 0;
 
-        card.innerHTML = `
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="card-title">${record.host}</h5>
-                </div>
-                <div class="card-body">
-                    <div>
-                        <small>CPU: ${record.cpu.toFixed(0)}%</small>
-                        <span style="color: #b2bec3"><small>(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)}Cores free)</small></span>
-                        <div class="hbar" style="background-color: ${colorInterpolate(record.cpu/100)}; width: ${record.cpu}%;"></div>
+        if (init) {
+            const card = document.createElement('div');
+            card.className = 'col-md-4';
+            card.innerHTML = `
+                <div class="card" id="card-${cardId}">
+                    <div class="card-header">
+                        <h5 class="card-title">${record.host}</h5>
                     </div>
-                    <div>
-                        <small>MEM: ${record.memory.toFixed(0)}%</small>
-                        <span style="color: #b2bec3"><small>(${(record.memory_free ? record.memory_free/1024 : 0).toFixed(0)}GiB free)</small></span>
-                        <div class="hbar" style="background-color: ${colorInterpolate(record.memory/100)}; width: ${record.memory}%;"></div>
-                    </div>
-                    <div>
-                        <!--<small>GPU: ${mean_cuda.toFixed(0)}% (${(max_cuda/1024).toFixed(0)}GiB free in cuda:${max_idx}, ${(sum_cuda/1024).toFixed(0)}GiB free in total)</small>-->
-                        <small>GPU: ${mean_cuda.toFixed(0)}%</small>
-                        <span style="color: #b2bec3"><small>(${(sum_cuda/1024).toFixed(0)}GiB free)</small></span>
-                        <div class="cuda-container">
-                            ${record.cuda ? record.cuda.map((cuda, index) => {
-                                const suffix = record.cuda.length <= 4 ? '' : '';
-                                const color = colorInterpolate(cuda/100);
-                                const text = (record.cuda_free[index]/1024).toFixed(0);
-                                return `<div class="cuda-box" style="background-color: ${color};">
-                                    <span class="cuda-text" style="color: ${autoContrast(color)}">${text}${suffix}</span>
-                                </div>`}
-                            ).join('') : ''}
+                    <div class="card-body">
+                        <div class="cpu">
+                            <small><span>CPU: ${record.cpu.toFixed(0)}%</span></small>
+                            <small><span style="color: #b2bec3">(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)</span></small>
+                            <div id="card-CPU-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.cpu/100)}; width: ${record.cpu}%;"></div>
+                        </div>
+                        <div class="mem">
+                            <small><span>MEM: ${record.memory.toFixed(0)}%</span></small>
+                            <small><span style="color: #b2bec3">(${(record.memory_free ? record.memory_free/1024 : 0).toFixed(0)} GiB free)</span></small>
+                            <div id="card-MEM-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.memory/100)}; width: ${record.memory}%;"></div>
+                        </div>
+                        <div class="cuda">
+                            <small><span>GPU: ${mean_cuda.toFixed(0)}%</span></small>
+                            <small><span style="color: #b2bec3">(${(sum_cuda/1024).toFixed(0)} GiB free)</span></small>
+                            <div class="cuda-container">
+                                ${record.cuda ? record.cuda.map((usage, index) => {
+                                    const color = colorInterpolate(usage/100);
+                                    return `
+                                        <div class="cuda-box" style="background-color: ${color};">
+                                            <span class="cuda-text" style="color: ${autoContrast(color)}">${(record.cuda_free[index]/1024).toFixed(0)}</span>
+                                        </div>
+                                    `}
+                                ).join('') : ''}
+                            </div>
+                        </div>
+                        <div class="timestamp">
+                            <span>Last Update: ${formattedTimestamp}</span> (<span>${timeAgo}</span>)
                         </div>
                     </div>
-                    <div class="timestamp">
-                        Last Update: ${formattedTimestamp} (<span id="time-ago-${cardId}">${timeAgo}</span>)
-                    </div>
                 </div>
-            </div>
-        `;
-        dashboardCards.appendChild(card);
+            `;
+            dashboardCards.appendChild(card);
+        } else {
+            const card = document.getElementById(`card-${cardId}`);
+
+            const cpu = card.getElementsByClassName('cpu')[0];
+            cpu.children[0].textContent.text = `CPU: ${record.cpu.toFixed(0)}%`;
+            cpu.children[1].textContent.text = `(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)`;
+            cpu.children[2].style.width = `${record.cpu}%`;
+            cpu.children[2].style.backgroundColor = colorInterpolate(record.cpu/100);
+            
+            const mem = card.getElementsByClassName('mem')[0];
+            mem.children[0].textContent.text = `MEM: ${record.memory.toFixed(0)}%`;
+            mem.children[1].textContent.text = `(${(record.memory_free ? record.memory_free/1024 : 0).toFixed(0)} GiB free)`;
+            mem.children[2].style.width = `${record.memory}%`;
+            mem.children[2].style.backgroundColor = colorInterpolate(record.memory/100);
+
+            const cuda = card.getElementsByClassName('cuda')[0];
+            cuda.children[0].textContent.text = `GPU: ${mean_cuda.toFixed(0)}%`;
+            cuda.children[1].textContent.text = `(${(sum_cuda/1024).toFixed(0)} GiB free)`;
+            record.cuda.forEach((usage, index) => {
+                const box = cuda.children[2].children[index];
+                const text = box.getElementsByTagName('span')[0];
+                const color = colorInterpolate(usage/100);
+                box.style.backgroundColor = color;
+                text.textContent.text = (record.cuda_free[index]/1024).toFixed(0);
+                text.style.color = autoContrast(color);
+            });
+            
+            const timestamp = card.getElementsByClassName('timestamp')[0];
+            timestamp.children[0].textContent.text = `Last Update: ${formattedTimestamp}`;
+            timestamp.children[1].textContent.text = timeAgo;
+        }
  
         if (timers[cardId]) { clearTimeout(timers[cardId]); }
 
         let count = 0; // 计数器
         const updateTimeAgo = () => {
-            const lastUpdateElement = document.getElementById(`time-ago-${cardId}`);
-            lastUpdateElement.innerHTML = getTimeAgo(record.timestamp);
+            const card = document.getElementById(`card-${cardId}`);
+            card.getElementsByClassName('timestamp')[0].children[1].innerHTML = getTimeAgo(record.timestamp);
 
             // 根据计数器决定下一个间隔
             count++;
@@ -71,10 +99,10 @@ async function fetchDashboardData() {
             // 超过5分钟未更新则标记为红色
             const dt = Math.floor((Date.now() - record.timestamp * 1000) / 1000);
             if (dt >= 5 * 60) {
-                card.getElementsByClassName('card')[0].style.borderColor = 'rgba(255, 0, 0, 1.0)';
+                card.style.borderColor = 'rgba(255, 0, 0, 1.0)';
                 card.getElementsByClassName('timestamp')[0].style.color = 'rgba(255, 0, 0, 1.0)';
             } else {
-                card.getElementsByClassName('card')[0].style.borderColor = 'rgba(0, 0, 0, 0.1)';
+                card.style.borderColor = 'rgba(0, 0, 0, 0.1)';
                 card.getElementsByClassName('timestamp')[0].style.color = 'rgba(178, 190, 195, 1.0)';
             }
         };
@@ -118,5 +146,5 @@ function autoContrast(bg_color) {
 }
 
 // 初始化时加载仪表盘数据
-fetchDashboardData();
+fetchDashboardData(true);
 setInterval(fetchDashboardData, 60000);

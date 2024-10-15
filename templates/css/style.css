@@ -19,6 +19,7 @@ h1 {
     height: 20px;
     border-radius: 5px;
     margin: 5px 0;
+    transition: width 0.5s ease, background-color 0.5s ease; /* 设置宽度和背景色的渐变 */
 }
 .cuda-container {
     display: flex;
@@ -38,6 +39,7 @@ h1 {
     margin-right: 5px;
     margin-top: 5px;
     margin-bottom: 5px;
+    transition: width 0.5s ease, background-color 0.5s ease; /* 设置宽度和背景色的渐变 */
 }
 .cuda-text {
     font-size: small;
