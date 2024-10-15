@@ -14,6 +14,8 @@ async function InitOption() {
         select.appendChild(option);
     });
     select.selectedIndex = 0;
+    document.getElementById('fetch-history').addEventListener('click', fetchHistoryData);
+    await fetchHistoryData();
 }
 InitOption();
 
@@ -50,7 +52,6 @@ async function fetchHistoryData() {
     renderChart('cuda-chart', labels, cudaData, '显存使用率');
 }
 
-document.getElementById('fetch-history').addEventListener('click', fetchHistoryData);
 
 function renderChart(chartId, x, y, title) {
     const ctx = document.getElementById(chartId).getContext('2d');
@@ -93,4 +94,3 @@ function renderChart(chartId, x, y, title) {
         }
     });
 }
-fetchHistoryData();
