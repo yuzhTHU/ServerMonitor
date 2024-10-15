@@ -13,6 +13,7 @@ async function InitOption() {
         option.innerHTML = host;
         select.appendChild(option);
     });
+    select.selectedIndex = 0;
 }
 InitOption();
 
