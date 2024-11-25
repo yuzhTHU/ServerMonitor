@@ -11,7 +11,7 @@ def get_stats(client, save=False):
     record = dict(timestamp=time.time())
 
     # 获取CPU使用率和总核数
-    _, stdout, _ = client.exec_command("top -b -n1 | grep 'Cpu(s)'")
+    _, stdout, _ = client.exec_command("top -b -n 3 -d 1 | grep 'Cpu(s)' | tail -n1")
     record['cpu'] = float(stdout.read().decode().split()[1])
     _, stdout, _ = client.exec_command("nproc")
     record['cpu-free'] = int(stdout.read().decode().strip()) * (1 - record['cpu'] / 100)
