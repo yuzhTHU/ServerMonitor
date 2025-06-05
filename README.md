@@ -57,3 +57,4 @@ If you are in the Tsinghua campus, you can access our demo server at [https://mo
 - [x] Fix the [Dead Gray Zone]() color in the dashboard tab
 - [ ] Add refresh button in the dashboard tab
 - [ ] Improve the speed of showing chart in the history tab
+- [ ] Add `loading` animation when fetching data

@@ -15,7 +15,7 @@ async function InitOption() {
     });
     select.selectedIndex = 0;
     document.getElementById('fetch-history').addEventListener('click', fetchHistoryData);
-    await fetchHistoryData();
+    // await fetchHistoryData();
 }
 InitOption();
 

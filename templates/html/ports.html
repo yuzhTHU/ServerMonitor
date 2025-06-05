@@ -1,0 +1,120 @@
+<div class="container">
+    <form id="portsFetchForm">
+        <div class="form-group row align-items-end">
+            <div class="col-md-5">
+                <label for="hostSelect">选择服务器</label>
+                <select class="form-control" id="portsHostSelect" required>
+                    <option value="" disabled selected hidden>Select a Host</option>
+                </select>
+            </div>
+            <div class="col-md-5">
+                <label for="portsSecretInput">输入访问秘钥</label>
+                <input type="password" class="form-control" id="portsSecretInput" placeholder="Enter your secret" required>
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary">查询端口</button>
+            </div>
+        </div>
+    </form>
+
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th onclick="sortTable(this, 0)">Host</th>
+                <th onclick="sortTable(this, 1)">Listen</th>
+                <th onclick="sortTable(this, 2)">Port</th>
+                <th onclick="sortTable(this, 3)">User</th>
+                <th onclick="sortTable(this, 4)">PID</th>
+                <th onclick="sortTable(this, 5)">Program</th>
+              </tr>
+        </thead>
+        <tbody id="portsTableBody">
+            <!-- <tr><td></td><td></td><td></td><td></td><td></td><td></td></tr> -->
+            <!-- <tr><td></td><td></td><td></td><td></td><td></td><td></td></tr> -->
+            <!-- <tr><td></td><td></td><td></td><td></td><td></td><td></td></tr> -->
+            <!-- <tr><td></td><td></td><td></td><td></td><td></td><td></td></tr> -->
+            <!-- <tr><td></td><td></td><td></td><td></td><td></td><td></td></tr> -->
+            <!-- Results will be inserted here -->
+        </tbody>
+    </table>
+</div>
+
+<script>
+    const hostSelect = document.getElementById('portsHostSelect');
+    const secretInput = document.getElementById('portsSecretInput');
+    const fetchForm = document.getElementById('portsFetchForm');
+    const tableBody = document.getElementById('portsTableBody');
+
+    // 初始化 hosts 列表
+    fetch('/api/hosts')
+        .then(response => response.json())
+        .then(data => {
+            data.forEach(host => {
+                const option = document.createElement('option');
+                option.value = host;
+                option.textContent = host;
+                hostSelect.appendChild(option);
+            });
+        });
+
+    // 监听按钮事件
+    fetchForm.addEventListener('submit', function (event) {
+        event.preventDefault();
+        const host = hostSelect.value;
+        const secret = secretInput.value;
+
+        fetch(`/api/ports?host=${encodeURIComponent(host)}&secret=${encodeURIComponent(secret)}`)
+            .then(response => response.json())
+            .then(records => {
+                tableBody.innerHTML = '';
+                records.forEach(record => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${record.host}</td>
+                        <td>${record.listen}</td>
+                        <td>${record.port}</td>
+                        <td>${record.user !== null ? record.user : '-'}</td>
+                        <td>${record.pid !== null ? record.pid : '-'}</td>
+                        <td>${record.program !== null ? record.program : '-'}</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            });
+    });
+
+    function sortTable(th, columnIndex) {
+        const table = th.closest('table');
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+
+        // 读取当前方向
+        const currentDirection = th.getAttribute('data-sort-direction') || 'asc';
+        const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+        th.setAttribute('data-sort-direction', newDirection);
+
+        // 清除其他列的箭头和状态
+        Array.from(th.parentNode.children).forEach(otherTh => {
+            if (otherTh !== th) {
+                otherTh.removeAttribute('data-sort-direction');
+                otherTh.textContent = otherTh.textContent.replace(/[\u25B2\u25BC]/g, '').trim();
+            }
+        });
+
+        // 比较并排序
+        const sortedRows = rows.sort((a, b) => {
+        const aText = a.children[columnIndex].textContent.trim();
+        const bText = b.children[columnIndex].textContent.trim();
+        const compare = aText.localeCompare(bText, undefined, { numeric: true });
+        return newDirection === 'asc' ? compare : -compare;
+        });
+
+        // 更新箭头提示
+        const arrow = newDirection === 'asc' ? ' ▲' : ' ▼';
+        th.textContent = th.textContent.replace(/[\u25B2\u25BC]/g, '').trim() + arrow;
+
+        // 更新表格
+        tbody.innerHTML = '';
+        sortedRows.forEach(row => tbody.appendChild(row));
+    }
+</script>
+    

@@ -16,9 +16,9 @@ async function initUserData() {
                             <tbody id="table-body-${host}"></tbody>
                         </table>
                     </div>
-                </div>
-                <div id="user-data-timestamp-${host}" class="timestamp">
-                    <span id="summary-time-${host}">Last Update: ???</span> (<span id="summary-time-ago-${host}">- ago</span>)
+                    <div class="timestamp">
+                        <span id="summary-time-${host}">Last Update: ???</span> (<span id="summary-time-ago-${host}">- ago</span>)
+                    </div>
                 </div>
             </div>
         `;

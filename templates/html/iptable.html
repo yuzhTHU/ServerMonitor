@@ -1,0 +1,62 @@
+<div class="container">
+    <div class="form-group row align-items-end">
+        <div class="col-md-10">
+            <label for="iptableSecret">输入访问秘钥</label>
+            <input type="password" class="form-control" id="iptableSecret" placeholder="Enter your secret">
+        </div>
+        <div class="col-md-2">
+            <button id="refreshButton" class="btn btn-primary">查询IP</button>
+        </div>
+    </div>
+
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Host</th>
+                <th>IP</th>
+            </tr>
+        </thead>
+        <tbody id="iptableBody">
+            <!-- IP records will be inserted here -->
+        </tbody>
+    </table>
+</div>
+<script>
+    // document.addEventListener('DOMContentLoaded', function() {
+    function fetchIPRecords() {
+        console.log('Hello!');
+        const secret = document.getElementById('iptableSecret').value;
+        const iptableBody = document.getElementById('iptableBody');
+        iptableBody.innerHTML = ''; // 清空表格内容
+
+        fetch('/api/hosts')
+            .then(response => response.json())
+            .then(hosts => {
+                hosts.forEach(host => {
+                    fetch(`/api/ip?host=${encodeURIComponent(host)}&secret=${encodeURIComponent(secret)}`)
+                        .then(response => response.json())
+                        .then(ip => {
+                            if (secret === '') {ip = '请输入秘钥'}
+                            else if (typeof ip === 'object' && ip != null) { ip = '秘钥错误' }
+                            const row = document.createElement('tr');
+                            row.innerHTML = `<td>${host}</td><td>${ip}</td>`;
+                            iptableBody.appendChild(row);
+                        })
+                        .catch(err => {
+                            const row = document.createElement('tr');
+                            row.innerHTML = `<td>${host}</td><td>获取IP失败</td>`;
+                            iptableBody.appendChild(row);
+                        });
+                    });
+            })
+            .catch(err => {
+                console.error('获取 hosts 失败:', err);
+            });
+    }
+
+    // 初始加载
+    fetchIPRecords();
+    // 刷新按钮
+    document.getElementById('refreshButton').addEventListener('click', fetchIPRecords);
+    // });
+</script>
