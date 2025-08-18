@@ -94,3 +94,18 @@ h1#title {
     color: white;
     font-weight: bold;
 }
+
+
+#cardContainer.editable .card {
+  cursor: move;
+  opacity: 0.95;
+}
+
+.card.dragging {
+  opacity: 0.5;
+  border: 2px dashed #007bff;
+}
+.drag-placeholder {
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+}

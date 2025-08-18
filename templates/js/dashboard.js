@@ -112,6 +112,8 @@ async function fetchDashboardData(init=false) {
         };
         updateTimeAgo();
     });
+
+    resumeCardOrder();
 }
 
 // 初始化时加载仪表盘数据
