@@ -12,3 +12,7 @@ bak
 mapping.json 
 # 包含服务器信息，不适合提交
 hosts.yml
+# 包含密码信息，不适合提交
+keys
+monitor-data.service
+monitor-web.service

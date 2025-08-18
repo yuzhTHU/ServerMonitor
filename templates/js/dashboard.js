@@ -38,7 +38,7 @@ async function fetchDashboardData(init=false) {
                                 ${record.cuda ? record.cuda.map((usage, index) => {
                                     const color = colorInterpolate(usage/100);
                                     return `
-                                        <div class="cuda-box" style="background-color: ${color};">
+                                        <div class="cuda-box" title="剩余显存 ${(record.cuda_free[index]/1024).toFixed(2)} GiB" style="background-color: ${color};">
                                             <span class="cuda-text" style="color: ${autoContrast(color)}">${(record.cuda_free[index]/1024).toFixed(0)}</span>
                                         </div>
                                     `}
@@ -56,26 +56,30 @@ async function fetchDashboardData(init=false) {
             const card = document.getElementById(`card-${cardId}`);
 
             const cpu = card.getElementsByClassName('cpu')[0];
-            cpu.children[0].innerHTML = `CPU: ${record.cpu.toFixed(0)}%`;
-            cpu.children[1].innerHTML = `(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)`;
+            cpu.children[0].children[0].innerHTML = `CPU: ${record.cpu.toFixed(0)}%`;
+            cpu.children[1].children[0].innerHTML = `(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)`;
             cpu.children[2].style.width = `${record.cpu}%`;
             cpu.children[2].style.backgroundColor = colorInterpolate(record.cpu/100);
             
             const mem = card.getElementsByClassName('mem')[0];
-            mem.children[0].innerHTML = `MEM: ${record.memory.toFixed(0)}%`;
-            mem.children[1].innerHTML = `(${(record.memory_free ? record.memory_free/1024 : 0).toFixed(0)} GiB free)`;
+            mem.children[0].children[0].innerHTML = `MEM: ${record.memory.toFixed(0)}%`;
+            mem.children[1].children[0].innerHTML = `(${(record.memory_free ? record.memory_free/1024 : 0).toFixed(0)} GiB free)`;
             mem.children[2].style.width = `${record.memory}%`;
             mem.children[2].style.backgroundColor = colorInterpolate(record.memory/100);
 
             const cuda = card.getElementsByClassName('cuda')[0];
-            cuda.children[0].innerHTML = `GPU: ${mean_cuda.toFixed(0)}%`;
-            cuda.children[1].innerHTML = `(${(sum_cuda/1024).toFixed(0)} GiB free)`;
+            cuda.children[0].children[0].innerHTML = `GPU: ${mean_cuda.toFixed(0)}%`;
+            cuda.children[1].children[0].innerHTML = `(${(sum_cuda/1024).toFixed(0)} GiB free)`;
             record.cuda.forEach((usage, index) => {
                 const box = cuda.children[2].children[index];
                 const text = box.getElementsByTagName('span')[0];
                 const color = colorInterpolate(usage/100);
+                const free = record.cuda_free[index]/1024;
+                const total = free / (1-usage/100);
+                // box.title = `剩余显存 ${free.toFixed(2)} / ${total.toFixed(2)} GiB`;
+                box.title = `剩余显存 ${free.toFixed(2)} GiB`;
                 box.style.backgroundColor = color;
-                text.innerHTML = (record.cuda_free[index]/1024).toFixed(0);
+                text.innerHTML = free.toFixed(0);
                 text.style.color = autoContrast(color);
             });
             

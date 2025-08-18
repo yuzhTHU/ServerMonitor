@@ -29,6 +29,24 @@ class Record(BaseModel):
     cuda_free: Union[List[float], None] # CUDA 显存剩余量, 单位: MiB
 
 
+def safe_exec_command(client, command, timeout=60):
+    stdin, stdout, stderr = client.exec_command(command)
+    
+    def read_output(out, result_holder):
+        result_holder.append(out.read().decode())
+
+    result = []
+    thread = threading.Thread(target=read_output, args=(stdout, result))
+    thread.start()
+    thread.join(timeout=timeout)
+
+    if thread.is_alive():
+        stdout.channel.close()  # 强制关闭channel
+        thread.join()
+        raise TimeoutError(f"Command timed out: {command}")
+    return result[0]
+
+
 def read_last_line(file_path, n=1):
     if not os.path.exists(file_path): return None
     return subprocess.check_output(['tail', '-n', str(n), file_path]).decode('utf-8')
@@ -206,7 +224,7 @@ class DiskUsageRecord(BaseModel):
 
 # 路由：获取用户磁盘用量
 @app.get("/api/disk", response_model=List[DiskUsageRecord])
-async def get_ports(host: str):
+async def get_disk(host: str):
     if host not in HOSTS:
         raise HTTPException(status_code=404, detail="Host not found")
     mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
@@ -216,7 +234,7 @@ async def get_ports(host: str):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        ssh.connect(**HOSTS[host])
+        ssh.connect(**HOSTS[host], timeout=10)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to host: {str(e)}")
@@ -229,7 +247,7 @@ async def get_ports(host: str):
     # df = df.set_index('disk').sort_index()
 
     sftp = ssh.open_sftp()
-    with sftp.file('/var/monitor-disk-usage/202506.jsonl', 'r') as f:
+    with sftp.file('/var/monitor-disk-usage/202508.jsonl', 'r') as f:
         raw_text = f.read().decode()
     df = pd.read_json(StringIO(raw_text), lines=True)
     df['disk'] = df['path'].str.rsplit('/', n=1).str[0]

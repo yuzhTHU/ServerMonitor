@@ -147,7 +147,9 @@ async function DrawChart(host) {
 async function InitDiskUsage() {
     const hosts = await fetch('/api/hosts').then(response => response.json());
     await InitContainer(hosts);
-    await Promise.all(hosts.map(host => DrawChart(host)));
+    await Promise.all(hosts.map(
+        host => DrawChart(host).catch(err => { console.error(`绘制 ${host.name} 时出错：`, err); })
+    ));
 }
 
 InitDiskUsage()
