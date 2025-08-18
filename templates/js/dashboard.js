@@ -1,5 +1,5 @@
 const timers = {}; // Object to store timer IDs for each card
-async function fetchDashboardData(init=false) {
+async function fetchDashboardData(init = false) {
     const records = await fetch('/api/dashboard').then(response => response.json());
     const dashboardCards = document.getElementById('dashboardCards');
     if (init) { dashboardCards.innerHTML = ''; }
@@ -24,25 +24,25 @@ async function fetchDashboardData(init=false) {
                         <div class="cpu">
                             <small><span>CPU: ${record.cpu.toFixed(0)}%</span></small>
                             <small><span style="color: #b2bec3">(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)</span></small>
-                            <div id="card-CPU-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.cpu/100)}; width: ${record.cpu}%;"></div>
+                            <div id="card-CPU-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.cpu / 100)}; width: ${record.cpu}%;"></div>
                         </div>
                         <div class="mem">
                             <small><span>MEM: ${record.memory.toFixed(0)}%</span></small>
-                            <small><span style="color: #b2bec3">(${(record.memory_free ? record.memory_free/1024 : 0).toFixed(0)} GiB free)</span></small>
-                            <div id="card-MEM-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.memory/100)}; width: ${record.memory}%;"></div>
+                            <small><span style="color: #b2bec3">(${(record.memory_free ? record.memory_free / 1024 : 0).toFixed(0)} GiB free)</span></small>
+                            <div id="card-MEM-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.memory / 100)}; width: ${record.memory}%;"></div>
                         </div>
                         <div class="cuda">
                             <small><span>GPU: ${mean_cuda.toFixed(0)}%</span></small>
-                            <small><span style="color: #b2bec3">(${(sum_cuda/1024).toFixed(0)} GiB free)</span></small>
+                            <small><span style="color: #b2bec3">(${(sum_cuda / 1024).toFixed(0)} GiB free)</span></small>
                             <div class="cuda-container">
                                 ${record.cuda ? record.cuda.map((usage, index) => {
-                                    const color = colorInterpolate(usage/100);
-                                    return `
-                                        <div class="cuda-box" title="剩余显存 ${(record.cuda_free[index]/1024).toFixed(2)} GiB" style="background-color: ${color};">
-                                            <span class="cuda-text" style="color: ${autoContrast(color)}">${(record.cuda_free[index]/1024).toFixed(0)}</span>
+                const color = colorInterpolate(usage / 100);
+                return `
+                                        <div class="cuda-box" title="剩余显存 ${(record.cuda_free[index] / 1024).toFixed(2)} GiB" style="background-color: ${color};">
+                                            <span class="cuda-text" style="color: ${autoContrast(color)}">${(record.cuda_free[index] / 1024).toFixed(0)}</span>
                                         </div>
                                     `}
-                                ).join('') : ''}
+            ).join('') : ''}
                             </div>
                         </div>
                         <div class="timestamp">
@@ -59,35 +59,35 @@ async function fetchDashboardData(init=false) {
             cpu.children[0].children[0].innerHTML = `CPU: ${record.cpu.toFixed(0)}%`;
             cpu.children[1].children[0].innerHTML = `(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)`;
             cpu.children[2].style.width = `${record.cpu}%`;
-            cpu.children[2].style.backgroundColor = colorInterpolate(record.cpu/100);
-            
+            cpu.children[2].style.backgroundColor = colorInterpolate(record.cpu / 100);
+
             const mem = card.getElementsByClassName('mem')[0];
             mem.children[0].children[0].innerHTML = `MEM: ${record.memory.toFixed(0)}%`;
-            mem.children[1].children[0].innerHTML = `(${(record.memory_free ? record.memory_free/1024 : 0).toFixed(0)} GiB free)`;
+            mem.children[1].children[0].innerHTML = `(${(record.memory_free ? record.memory_free / 1024 : 0).toFixed(0)} GiB free)`;
             mem.children[2].style.width = `${record.memory}%`;
-            mem.children[2].style.backgroundColor = colorInterpolate(record.memory/100);
+            mem.children[2].style.backgroundColor = colorInterpolate(record.memory / 100);
 
             const cuda = card.getElementsByClassName('cuda')[0];
             cuda.children[0].children[0].innerHTML = `GPU: ${mean_cuda.toFixed(0)}%`;
-            cuda.children[1].children[0].innerHTML = `(${(sum_cuda/1024).toFixed(0)} GiB free)`;
+            cuda.children[1].children[0].innerHTML = `(${(sum_cuda / 1024).toFixed(0)} GiB free)`;
             record.cuda.forEach((usage, index) => {
                 const box = cuda.children[2].children[index];
                 const text = box.getElementsByTagName('span')[0];
-                const color = colorInterpolate(usage/100);
-                const free = record.cuda_free[index]/1024;
-                const total = free / (1-usage/100);
+                const color = colorInterpolate(usage / 100);
+                const free = record.cuda_free[index] / 1024;
+                const total = free / (1 - usage / 100);
                 // box.title = `剩余显存 ${free.toFixed(2)} / ${total.toFixed(2)} GiB`;
                 box.title = `剩余显存 ${free.toFixed(2)} GiB`;
                 box.style.backgroundColor = color;
                 text.innerHTML = free.toFixed(0);
                 text.style.color = autoContrast(color);
             });
-            
+
             const timestamp = card.getElementsByClassName('timestamp')[0];
             timestamp.children[0].innerHTML = `Last Update: ${formattedTimestamp}`;
             timestamp.children[1].innerHTML = timeAgo;
         }
- 
+
         if (timers[cardId]) { clearTimeout(timers[cardId]); }
 
         let count = 0; // 计数器
@@ -99,7 +99,7 @@ async function fetchDashboardData(init=false) {
             count++;
             let delay = count < 60 ? 1000 : count < 120 ? 60000 : 3600000;
             timers[cardId] = setTimeout(updateTimeAgo, delay);
-            
+
             // 超过5分钟未更新则标记为红色
             const dt = Math.floor((Date.now() - record.timestamp * 1000) / 1000);
             if (dt >= 5 * 60) {
@@ -113,9 +113,53 @@ async function fetchDashboardData(init=false) {
         updateTimeAgo();
     });
 
-    resumeCardOrder();
+    resumeDashboardCardOrder();
 }
 
 // 初始化时加载仪表盘数据
 fetchDashboardData(true);
 setInterval(fetchDashboardData, 60000);
+
+
+// 切换编辑模式
+const editBtn = document.getElementById("editLayoutBtn");
+let _tipBar;
+let _editMode = false;
+let _oldContext = "<oldContent>";
+editBtn.addEventListener("click", () => {
+    _editMode = !_editMode;
+
+    if (_editMode) {
+        _oldContext = editBtn.textContent;
+        editBtn.textContent = "完成编辑";
+
+        dashboardCards.classList.add("editable");
+        enableDragDrop();
+
+        // 创建提示条
+        _tipBar = document.createElement('div');
+        _tipBar.className = 'edit-tip-bar';
+        _tipBar.textContent = "拖动卡片以排序";
+        _tipBar.style.cssText = `
+            padding: 8px;
+            background: #fffae6;
+            color: #333;
+            font-weight: bold;
+            text-align: center;
+            border-bottom: 1px solid #ffd700;
+        `;
+        dashboardCards.prepend(_tipBar);
+
+    } else {
+        editBtn.textContent = _oldContext;
+        dashboardCards.classList.remove("editable");
+        disableDragDrop();
+        saveCardOrder();
+
+        // 移除提示条
+        if (_tipBar) {
+            _tipBar.remove();
+            _tipBar = null;
+        }
+    }
+});

@@ -5,7 +5,7 @@ async function initUserData() {
     summary.innerHTML = '';
     hosts.forEach(async host => {
         const container = `
-            <div class="user-data-table-container">
+            <div class="user-data-table-container" id="user-card-${host}">
                 <div class="card-header">
                     <h5 class="card-title">${host}</h5>
                 </div>
@@ -24,6 +24,8 @@ async function initUserData() {
         `;
         summary.innerHTML += container;
     });
+
+    resumeUserCardOrder();
 };
 initUserData();
 

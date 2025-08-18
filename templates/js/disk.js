@@ -4,6 +4,7 @@ async function InitContainer(hosts) {
     hosts.forEach(host => {
         const card = document.createElement('div');
         card.className = "card mx-0 shadow-sm mb-4";
+        card.id = `disk-card-${host}`;
         card.innerHTML = `
             <div class="card-header">
                 <h5 class="fw-bold">${host}</h5>
@@ -17,6 +18,8 @@ async function InitContainer(hosts) {
         `;
         container.appendChild(card);
     });
+ 
+    resumeDiskCardOrder();
 }
 
 async function DrawChart(host) {
