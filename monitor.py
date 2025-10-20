@@ -1,141 +1,16 @@
 import os
+import yaml
 import time
 import json
-import paramiko
+import dotenv
 import threading
 import traceback
 from logging import getLogger
-from logger import set_logger
-import yaml
+from src.logger import set_logger
+from src.ssh_connect import ssh_connect
+from src.monitor import get_cpu_stats, get_memory_stats, get_cuda_stats
 
-
-def safe_exec_command(client, command, timeout=60):
-    stdin, stdout, stderr = client.exec_command(command)
-    
-    def read_output(out, result_holder):
-        result_holder.append(out.read().decode())
-
-    result = []
-    thread = threading.Thread(target=read_output, args=(stdout, result))
-    thread.start()
-    thread.join(timeout=timeout)
-
-    if thread.is_alive():
-        stdout.channel.close()  # 强制关闭channel
-        thread.join()
-        raise TimeoutError(f"Command timed out: {command}")
-    return result[0]
-
-
-def get_cpu_stats(client):
-    record = {}
-    # 获取CPU使用率和总核数
-    result = safe_exec_command(client, "top -b -n 3 -d 1 | grep 'Cpu(s)' | tail -n1")
-    record['cpu'] = float(result.split()[1])
-    result = safe_exec_command(client, "nproc")
-    record['cpu_free'] = int(result.strip()) * (1 - record['cpu'] / 100)
-
-    # 获取系统上各个用户的 CPU 使用情况
-    result = safe_exec_command(client, "ps -eo user:100,%cpu | awk 'NR > 1 {cpu[$1] += $2} END {for (u in cpu) print u, cpu[u]}' | sort -k2 -nr")
-    record['cpu_per_user'] = []
-    for line in result.splitlines(): # Skip the header
-        user, cpu_usage = line.split()
-        record['cpu_per_user'].append((user, float(cpu_usage)))
-    # 应当有 sum(usage for user, usage in record['cpu_per_user']) ~ record['cpu'] * record['cpu-free'] / (1 - record['cpu'] / 100)
-
-    return record
-
-
-def get_memory_stats(client):
-    record = {}
-    # 获取内存使用率和总内存
-    result = safe_exec_command(client, "free -m | awk 'NR==2{print $3/$2*100, $7}'")
-    record['memory'], record['memory_free'] = result.strip().split()
-    record['memory'], record['memory_free'] = float(record['memory']), float(record['memory_free'])
-
-    # 获取系统上各个用户的内存使用情况
-    result = safe_exec_command(client, "ps -eo user:100,%mem | awk 'NR > 1 {mem[$1] += $2} END {for (u in mem) print u, mem[u]}' | sort -k2 -nr")
-    record['memory_per_user'] = []
-    for line in result.splitlines():  # Skip the header
-        user, memory_usage = line.split()
-        record['memory_per_user'].append((user, float(memory_usage)))
-    # 应当有 sum(usage for user, usage in record['memory_per_user']) ~ record['memory']
-
-    return record
-
-
-def get_cuda_stats(client):
-    record = {}
-    # 检查是否有GPU
-    result = safe_exec_command(client, "lspci | grep -i nvidia")
-    if not result:
-        return {'cuda': [], 'cuda-free': [], 'cuda_per_user': []}
-
-    # 检查是否有失效的GPU（Unable to determine the device handle for gpu 0000:0A:00.0: Unknown Error）
-    result = safe_exec_command(client, "nvidia-smi -L")
-    if 'Unable to determine the device handle for gpu' in result:
-        valid = []
-        for idx, row in enumerate(result.strip().split('\n')):
-            if 'Unable to determine the device handle for gpu' not in row: 
-                valid.append(row.split(':')[0].split(' ')[1])
-        valid = ' --id=' + ','.join(valid)
-    else:
-        valid = ''
-        
-    # 获取每个GPU的显存使用情况和总显存
-    result = safe_exec_command(client, "nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader,nounits" + valid)
-    indexes, memory_useds, memory_totals = [], [], []
-    for gpu in result.strip().split('\n'):
-        index, memory_used, memory_total = gpu.split(',')
-        indexes.append(int(index))
-        memory_useds.append(float(memory_used))
-        memory_totals.append(float(memory_total))
-    record['cuda'] = [0] * (max(indexes) + 1)
-    record['cuda-free'] = [0] * (max(indexes) + 1)
-    for index, memory_used, memory_total in zip(indexes, memory_useds, memory_totals):
-        record['cuda'][index] = memory_used / memory_total * 100
-        record['cuda-free'][index] = memory_total - memory_used
-
-    # 获取每个用户在每个显卡上的显存使用情况
-    # PID -> User
-    result = safe_exec_command(client, "ps -eo user:100,pid")
-    pid2user = {}
-    for line in result.splitlines()[1:]: # Skip the header
-        user, pid = line.split()
-        pid2user[pid] = user
-    # GPU-UUID -> GPU-INDEX
-    result = safe_exec_command(client, "nvidia-smi --query-gpu=index,uuid --format=csv,noheader" + valid)
-    uuid2cuda = {}
-    for line in result.splitlines():
-        index, uuid = line.split(',')
-        uuid2cuda[uuid] = f'cuda:{index}'
-    # Memory -> PID & GPU-UUID
-    result = safe_exec_command(client, "nvidia-smi --query-compute-apps=pid,gpu_uuid,used_memory --format=csv,noheader,nounits" + valid)
-    record['cuda_per_user'] = []
-    for line in result.splitlines():
-        pid, uuid, memory = line.split(',')
-        cuda = uuid2cuda.get(uuid, 'UNKNOWN')
-        user = pid2user.get(pid, f'PID{pid}')
-        memory = int(memory)
-        record['cuda_per_user'].append((cuda, user, memory))
-    # 应当有 
-    # cuda_usage = np.zeros(len(record['cuda']))
-    # for device, user, usage in record['cuda_per_user']:
-    #     cuda_usage[int(device.split(':')[1])] += usage
-    # (100 * cuda_usage / np.array(record['cuda-free']) * (1 - np.array(record['cuda']) / 100)).tolist() ~ record['cuda']
-    return record
-
-
-def get_stats(client, save=False):
-    record = dict(timestamp=time.time())
-    record.update(get_cpu_stats(client))
-    record.update(get_memory_stats(client))
-    try:
-        record.update(get_cuda_stats(client))
-    except: # TimeoutError as e:
-        record.update({'cuda': [], 'cuda-free': [], 'cuda_per_user': []})
-        traceback.print_exc()
-    return record
+dotenv.load_dotenv()
 
 
 def monitor_server(host, server_config, interval=30, save_path='./data', patience=10):
@@ -144,36 +19,34 @@ def monitor_server(host, server_config, interval=30, save_path='./data', patienc
     logger = getLogger(f'my.{host}')
     cnt = patience
     while cnt > 0:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            if 'jumper' in server_config:
-                jumper_config = server_config.pop('jumper')
-                jumper = paramiko.SSHClient()
-                jumper.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                jumper.connect(**jumper_config, timeout=30)
-                transport = jumper.get_transport()
-                if transport is None or not transport.is_active():
-                    raise RuntimeError("跳板 transport 不可用")
-                # open_channel 建立 direct-tcpip 到目标主机
-                sock = transport.open_channel(
-                    "direct-tcpip",
-                    dest_addr=(server_config['hostname'], server_config['port']), 
-                    src_addr=("127.0.0.1", 0)
-                )
-                server_config['sock'] = sock
-            ssh.connect(**server_config, timeout=30)
+            ssh = ssh_connect(server_config)
             cnt = patience
             while True:
-                record = get_stats(ssh)
+                record = dict(timestamp=time.time())
+                record.update(get_cpu_stats(ssh))
+                record.update(get_memory_stats(ssh))
+                try:
+                    record.update(get_cuda_stats(ssh))
+                except Exception as e:
+                    record.update({'cuda': [], 'cuda-free': [], 'cuda_per_user': []})
+                    logger.error(
+                        f"Failed to get CUDA stats in {host}: "
+                        f"[{type(e)}] {e}\n"
+                        f"{traceback.format_exc()}"
+                    )
                 record['host'] = host
-                with open(path, 'a') as f: f.write(json.dumps(record) + '\n')
+                with open(path, 'a') as f: 
+                    f.write(json.dumps(record) + '\n')
                 logger.debug(' | '.join([f"{k}: {v}" for k, v in record.items()]))
                 time.sleep(interval)
         except Exception as e:
             cnt -= 1
-            logger.error(f"Failed to connect to {host}: {e}")
-            traceback.print_exc()
+            logger.error(
+                f"Failed to connect to {host}: "
+                f"[{type(e)}] {e}\n"
+                f"{traceback.format_exc()}"
+            )
             time.sleep(60)
 
 

@@ -2,12 +2,25 @@ import os
 import yaml
 import time
 import json
+import pyotp
+import socket
+import dotenv
+import paramiko
+import traceback
 import subprocess
 import pandas as pd
-from typing import List, Union, Tuple, Dict
+from io import StringIO
+from logging import getLogger
+from src.logger import set_logger
+from typing import List, Union, Dict
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse
 from pydantic import BaseModel
+from src.ssh_connect import ssh_connect, safe_exec_command
+
+dotenv.load_dotenv()
+set_logger('ServerMonitor', file='./log/web.log', basename='my')
+logger = getLogger(f'my.web')
 
 # 获取数据文件路径
 DATA_DIR = './data'
@@ -27,24 +40,6 @@ class Record(BaseModel):
     cpu_free: Union[float, None]    # CPU 剩余核数
     memory_free: Union[float,None]  # 内存剩余量, 单位: MiB
     cuda_free: Union[List[float], None] # CUDA 显存剩余量, 单位: MiB
-
-
-def safe_exec_command(client, command, timeout=60):
-    stdin, stdout, stderr = client.exec_command(command)
-    
-    def read_output(out, result_holder):
-        result_holder.append(out.read().decode())
-
-    result = []
-    thread = threading.Thread(target=read_output, args=(stdout, result))
-    thread.start()
-    thread.join(timeout=timeout)
-
-    if thread.is_alive():
-        stdout.channel.close()  # 强制关闭channel
-        thread.join()
-        raise TimeoutError(f"Command timed out: {command}")
-    return result[0]
 
 
 def read_last_line(file_path, n=1):
@@ -174,7 +169,7 @@ async def get_history(host: str, start: float, end: float):
                 )
             except Exception as e:
                 # 如果某行解析失败，打印一下日志并跳过
-                print(f"parse error: {e}  --  line: {line.strip()}")
+                logger.error(f"parse error: {e}  --  line: {line.strip()}")
                 continue
 
     return records
@@ -229,8 +224,6 @@ async def get_disk(host: str):
         raise HTTPException(status_code=404, detail="Host not found")
     mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
 
-    from io import StringIO
-    import paramiko
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -285,9 +278,7 @@ class PortRecord(BaseModel):
 # 路由：获取开启的端口和开启端口的用户，需要验证用户的一次性密码 TOTP
 @app.get("/api/ports", response_model=List[PortRecord])
 async def get_ports(host: str, secret: str):
-    import pyotp
-    with open('./keys/TOTP', 'r') as f:
-        base32secret = f.read().strip()
+    base32secret = os.getenv('TOTP_SECRET')
     totp = pyotp.TOTP(base32secret, interval=30, digits=6)
     if not totp.verify(secret, valid_window=2):
         raise HTTPException(status_code=401, detail="Invalid TOTP secret")
@@ -297,7 +288,6 @@ async def get_ports(host: str, secret: str):
     timestamp = time.time()
     mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
 
-    import paramiko
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
@@ -333,7 +323,6 @@ async def get_ports(host: str, secret: str):
 # 路由：返回服务器 IP
 @app.get("/api/ip")
 async def get_ip(host: str, secret: str):
-    import pyotp
     with open('./keys/TOTP', 'r') as f:
         base32secret = f.read().strip()
     totp = pyotp.TOTP(base32secret, interval=30, digits=6)
@@ -343,7 +332,6 @@ async def get_ip(host: str, secret: str):
     if host not in HOSTS:
         raise HTTPException(status_code=404, detail="Host not found")
     # hostname to IP
-    import socket
     ip = socket.gethostbyname(HOSTS[host]['hostname'])
     return ip
 
@@ -359,83 +347,91 @@ async def get_hosts():
 async def get_server_info(host: str):
     if host not in HOSTS:
         raise HTTPException(status_code=404, detail="Host not found")
-
-    import paramiko
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    server_config = HOSTS[host].copy()
-    if 'sock' in server_config:
-        server_config['sock'] = paramiko.ProxyCommand(server_config['sock'])
     try:
-        ssh.connect(**server_config, timeout=15)
+        ssh = ssh_connect(HOSTS[host])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to host: {str(e)}")
 
-    sftp = None
-    remote_path = "/tmp/get_server_info.py"
     try:
-        def _exec(cmd: str):
-            stdin, stdout, stderr = ssh.exec_command(cmd)
-            out = stdout.read().decode(errors='ignore')
-            err = stderr.read().decode(errors='ignore')
-            # 获取退出码
-            exit_status = stdout.channel.recv_exit_status()
-            return exit_status, out, err
-
-        sftp = ssh.open_sftp()
-        # 将本地脚本上传到远端临时路径
-        sftp.put("get_server_info.py", remote_path)
-
-        # 第一次尝试执行脚本
-        code, out, err = _exec(f"python3 {remote_path}")
-
-        # 如果因为缺少 psutil 失败，尝试安装后重试
-        # if code != 0 and ('ModuleNotFoundError' in err or 'No module named' in err) and 'psutil' in err:
-        #     # 优先使用 python3 -m pip，其次 pip3
-        #     _exec("python3 -m pip --version >/dev/null 2>&1 || true")
-        #     _exec("python3 -m pip install --user -q psutil || pip3 install --user -q psutil || true")
-        #     # 刷新 PATH 以便找到 --user 安装包（某些环境下需要）
-        #     _exec("export PYTHONUSERBASE=~/.local; export PATH=~/.local/bin:$PATH; true")
-        #     code, out, err = _exec(f"python3 {remote_path}")
-
-        # 清理远端脚本
+        info = {}
+        # Hostname
+        info["💻 Hostname"] = safe_exec_command(ssh, "hostname -f 2>/dev/null || hostname").strip()
+        # CPU Model
+        info["🧠 CPU Model"] = safe_exec_command(ssh, "lscpu | grep 'Model name' | awk -F: '{print $2}'").strip()
+        # Cores / Threads
+        physical = safe_exec_command(ssh, "grep 'core id' /proc/cpuinfo | sort -u | wc -l").strip()
+        logical = safe_exec_command(ssh, "nproc").strip()
+        info["⚙️ Cores / Threads"] = f"{physical} C / {logical} T"
+        # CPU Frequency
+        output = safe_exec_command(ssh, "lscpu | grep 'MHz'").strip()
+        frequency = {}
+        for line in output.splitlines():
+            k, v = line.split(':')
+            frequency[k.strip()] = float(v.strip())
+        freq = frequency.get('CPU MHz', 'N/A')
+        freq_min = frequency.get('CPU min MHz', 'N/A')
+        freq_max = frequency.get('CPU max MHz', 'N/A')
+        info["⏱️ CPU Frequency"] = f"{freq} MHz (min: {freq_min} MHz, max: {freq_max} MHz)"
+        # SIMD Support
+        output = safe_exec_command(ssh, "grep '^flags' /proc/cpuinfo | head -n 1").strip()
+        flags = set(output.split(':', 2)[1].split())
+        info["🧩 SIMD Support"] = f"AVX={'avx' in flags}, AVX2={'avx2' in flags}, AVX512={any('avx512f' in f for f in flags)}"
+        # L3 Cache
+        info["🗃️ L3 Cache"] = safe_exec_command(ssh, "lscpu | grep 'L3 cache' | awk -F: '{print $2}'").strip()
+        # NUMA Nodes
+        info["🔀 NUMA Nodes"] = safe_exec_command(ssh, "lscpu | grep 'NUMA node(s)' | awk -F: '{print $2}'").strip()
+        # Total Memory
+        output = safe_exec_command(ssh, 'cat /proc/meminfo').strip()
+        lines = [line for line in output.splitlines() if 'MemTotal' in line]
+        assert len(lines) == 1, output
+        mem_kB = int(lines[0].removeprefix('MemTotal:').strip().removesuffix('kB').strip())
+        info["💾 Memory Total"] = f"{mem_kB / 1024 / 1024:.0f} GB"
+        # GPU Model
+        output = safe_exec_command(ssh, "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader").strip()
         try:
-            sftp.remove(remote_path)
+            df = pd.read_csv(StringIO(output), sep=',', names=['Name', 'Memory'])
+            df['Name'] = df['Name'].str.strip()
+            df['Memory'] = df['Memory'].str.strip()
+            gpu_model = ""
+            for name in df['Name'].unique():
+                if gpu_model != "":
+                    gpu_model += ", "
+                count = (df['Name'] == name).sum()
+                mem_MB = df.loc[df['Name'] == name, 'Memory'].iloc[0]
+                mem_GB = int(mem_MB.removesuffix('MiB').strip()) / 1024
+                gpu_model += f"{count}*{name} ({mem_GB:.0f} GiB) "
+            if gpu_model == "":
+                gpu_model = "N/A"
         except Exception:
-            pass
-
-        # 如果仍失败，则使用基础命令回退，避免前端报错
-        # if code != 0 and not out:
-        #     sections = []
-        #     def add(title: str, cmd: str):
-        #         c, o, e = _exec(cmd)
-        #         text = o.strip() if o.strip() else e.strip()
-        #         sections.append(f"{title}\n{text}\n")
-
-        #     add("Hostname", "hostname")
-        #     add("CPU Model", "lscpu | grep -E 'Model name|Architecture|CPU\(s\)|Thread|Core|Socket|NUMA' || true")
-        #     add("Memory", "free -h || cat /proc/meminfo | head -n 5")
-        #     add("OS / Kernel", "uname -a")
-        #     add("Python", "python3 --version || python --version || true")
-        #     # GPU 信息（若有）
-        #     add("NVIDIA GPUs", "nvidia-smi --query-gpu=name,memory.total,memory.free,utilization.gpu --format=csv,noheader 2>/dev/null || echo 'nvidia-smi not found'")
-
-        #     fallback_text = (
-        #         "="*60 + "\n" +
-        #         "Server Info (fallback mode)\n" +
-        #         "="*60 + "\n\n" +
-        #         "\n\n".join(sections)
-        #     )
-        #     # 把原始错误也带上结尾，方便排查
-        #     if err.strip():
-        #         fallback_text += f"\n\nError Detail:\n{err.strip()}\n"
-        #     return PlainTextResponse(content=fallback_text)
-
-        # 正常返回脚本输出（或包含少量 stderr 的输出）
-        return PlainTextResponse(content=out if out else err)
+            gpu_model = f"N/A ({output})"
+        info["🎮 GPU Model"] = gpu_model
+        # CUDA Version
+        info["🚀 CUDA Version"] = safe_exec_command(ssh, "nvidia-smi | grep -i 'CUDA Version' | head -n1 | awk -F 'CUDA Version: ' '{print $2}' | awk '{print $1}'").strip() or "N/A"
+        # OS Version
+        output = safe_exec_command(ssh, 'cat /etc/os-release').strip()
+        lines = [line for line in output.splitlines() if 'PRETTY_NAME' in line]
+        assert len(lines) == 1, output
+        info["🐧 OS Version"] = lines[0].strip().removeprefix('PRETTY_NAME=').strip('"')
+        # Kernel Version
+        info["🧱 Kernel Version"] = safe_exec_command(ssh, "uname -a").strip()
+        # Conclude
+        max_len = max(map(len, info))
+        content = '\n'.join([f"{k:{max_len}} : {v}" for k, v in info.items()])
+        max_len = max(map(len, content.splitlines()))
+        content = (
+            '=' * max_len + '\n' +
+            '🔍 Server Hardware Info Summary\n' +
+            '=' * max_len + '\n' +
+            content + '\n' +
+            '=' * max_len
+        )
+        return PlainTextResponse(content=content)
+    except Exception as e:
+        return PlainTextResponse(content=(
+            f"Error retrieving server info: [{type(e)}] {e}\n"
+            f"{traceback.format_exc()}"
+        ), status_code=500)
     finally:
-        if sftp:
-            sftp.close()
         ssh.close()
 
 

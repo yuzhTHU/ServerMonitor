@@ -3,6 +3,7 @@ __pycache__/
 venv
 myenv
 .vscode
+.env
 
 log
 data
