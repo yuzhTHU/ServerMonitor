@@ -18,7 +18,7 @@ async function fetchDashboardData(init = false) {
             card.innerHTML = `
                 <div class="card mx-0" id="card-${cardId}">
                     <div class="card-header">
-                        <h5 class="card-title">${record.host}</h5>
+                        <h5 class="card-title"><a href="/server?host=${encodeURIComponent(record.host)}" class="text-decoration-none">${record.host}</a></h5>
                     </div>
                     <div class="card-body">
                         <div class="cpu">

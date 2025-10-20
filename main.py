@@ -6,7 +6,7 @@ import subprocess
 import pandas as pd
 from typing import List, Union, Tuple, Dict
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 # 获取数据文件路径
@@ -247,7 +247,7 @@ async def get_disk(host: str):
     # df = df.set_index('disk').sort_index()
 
     sftp = ssh.open_sftp()
-    with sftp.file('/var/monitor-disk-usage/202508.jsonl', 'r') as f:
+    with sftp.file('/var/monitor-disk-usage/202510.jsonl', 'r') as f:
         raw_text = f.read().decode()
     df = pd.read_json(StringIO(raw_text), lines=True)
     df['disk'] = df['path'].str.rsplit('/', n=1).str[0]
@@ -354,6 +354,91 @@ async def get_hosts():
     return list(HOSTS.keys())
 
 
+# 路由：获取指定服务器的硬件/系统详情（通过 SSH 上传并执行 get_server_info.py）
+@app.get("/api/server_info", response_class=PlainTextResponse)
+async def get_server_info(host: str):
+    if host not in HOSTS:
+        raise HTTPException(status_code=404, detail="Host not found")
+
+    import paramiko
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    server_config = HOSTS[host].copy()
+    if 'sock' in server_config:
+        server_config['sock'] = paramiko.ProxyCommand(server_config['sock'])
+    try:
+        ssh.connect(**server_config, timeout=15)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect to host: {str(e)}")
+
+    sftp = None
+    remote_path = "/tmp/get_server_info.py"
+    try:
+        def _exec(cmd: str):
+            stdin, stdout, stderr = ssh.exec_command(cmd)
+            out = stdout.read().decode(errors='ignore')
+            err = stderr.read().decode(errors='ignore')
+            # 获取退出码
+            exit_status = stdout.channel.recv_exit_status()
+            return exit_status, out, err
+
+        sftp = ssh.open_sftp()
+        # 将本地脚本上传到远端临时路径
+        sftp.put("get_server_info.py", remote_path)
+
+        # 第一次尝试执行脚本
+        code, out, err = _exec(f"python3 {remote_path}")
+
+        # 如果因为缺少 psutil 失败，尝试安装后重试
+        # if code != 0 and ('ModuleNotFoundError' in err or 'No module named' in err) and 'psutil' in err:
+        #     # 优先使用 python3 -m pip，其次 pip3
+        #     _exec("python3 -m pip --version >/dev/null 2>&1 || true")
+        #     _exec("python3 -m pip install --user -q psutil || pip3 install --user -q psutil || true")
+        #     # 刷新 PATH 以便找到 --user 安装包（某些环境下需要）
+        #     _exec("export PYTHONUSERBASE=~/.local; export PATH=~/.local/bin:$PATH; true")
+        #     code, out, err = _exec(f"python3 {remote_path}")
+
+        # 清理远端脚本
+        try:
+            sftp.remove(remote_path)
+        except Exception:
+            pass
+
+        # 如果仍失败，则使用基础命令回退，避免前端报错
+        # if code != 0 and not out:
+        #     sections = []
+        #     def add(title: str, cmd: str):
+        #         c, o, e = _exec(cmd)
+        #         text = o.strip() if o.strip() else e.strip()
+        #         sections.append(f"{title}\n{text}\n")
+
+        #     add("Hostname", "hostname")
+        #     add("CPU Model", "lscpu | grep -E 'Model name|Architecture|CPU\(s\)|Thread|Core|Socket|NUMA' || true")
+        #     add("Memory", "free -h || cat /proc/meminfo | head -n 5")
+        #     add("OS / Kernel", "uname -a")
+        #     add("Python", "python3 --version || python --version || true")
+        #     # GPU 信息（若有）
+        #     add("NVIDIA GPUs", "nvidia-smi --query-gpu=name,memory.total,memory.free,utilization.gpu --format=csv,noheader 2>/dev/null || echo 'nvidia-smi not found'")
+
+        #     fallback_text = (
+        #         "="*60 + "\n" +
+        #         "Server Info (fallback mode)\n" +
+        #         "="*60 + "\n\n" +
+        #         "\n\n".join(sections)
+        #     )
+        #     # 把原始错误也带上结尾，方便排查
+        #     if err.strip():
+        #         fallback_text += f"\n\nError Detail:\n{err.strip()}\n"
+        #     return PlainTextResponse(content=fallback_text)
+
+        # 正常返回脚本输出（或包含少量 stderr 的输出）
+        return PlainTextResponse(content=out if out else err)
+    finally:
+        if sftp:
+            sftp.close()
+        ssh.close()
+
+
 # 路由：返回前端HTML页面
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -373,6 +458,13 @@ async def get_js(filename: str):
 @app.get("/html/{filename}")
 async def get_js(filename: str):
     return FileResponse(f"templates/html/{filename}")
+
+
+# 详情页 HTML
+@app.get("/server", response_class=HTMLResponse)
+async def server_page():
+    with open("templates/server.html", encoding='utf-8') as f:
+        return HTMLResponse(content=f.read())
 
 
 # 路由：获取图标 ./assets/favicon.ico
