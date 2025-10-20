@@ -147,8 +147,21 @@ def monitor_server(host, server_config, interval=30, save_path='./data', patienc
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            if 'sock' in server_config:
-                server_config['sock'] = paramiko.ProxyCommand(server_config['sock'])
+            if 'jumper' in server_config:
+                jumper_config = server_config.pop('jumper')
+                jumper = paramiko.SSHClient()
+                jumper.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                jumper.connect(**jumper_config, timeout=30)
+                transport = jumper.get_transport()
+                if transport is None or not transport.is_active():
+                    raise RuntimeError("跳板 transport 不可用")
+                # open_channel 建立 direct-tcpip 到目标主机
+                sock = transport.open_channel(
+                    "direct-tcpip",
+                    dest_addr=(server_config['hostname'], server_config['port']), 
+                    src_addr=("127.0.0.1", 0)
+                )
+                server_config['sock'] = sock
             ssh.connect(**server_config, timeout=30)
             cnt = patience
             while True:
@@ -159,9 +172,9 @@ def monitor_server(host, server_config, interval=30, save_path='./data', patienc
                 time.sleep(interval)
         except Exception as e:
             cnt -= 1
-            time.sleep(60)
             logger.error(f"Failed to connect to {host}: {e}")
             traceback.print_exc()
+            time.sleep(60)
 
 
 if __name__ == '__main__':
