@@ -40,7 +40,7 @@ class Record(BaseModel):
     cpu_free: Union[float, None]    # CPU 剩余核数
     memory_free: Union[float,None]  # 内存剩余量, 单位: MiB
     cuda_free: Union[List[float], None] # CUDA 显存剩余量, 单位: MiB
-
+    cuda_per_user: Union[List[List[Union[str, int]]], None] = None # [gpu_id, username, memory_mib]
 
 def read_last_line(file_path, n=1):
     if not os.path.exists(file_path): return None
@@ -51,6 +51,7 @@ def read_last_line(file_path, n=1):
 @app.get("/api/dashboard", response_model=List[Record])
 async def get_dashboard():
     records = []
+    mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
     for host in HOSTS:
         file_path = os.path.join(DATA_DIR, f'{host}.json')
         if not os.path.exists(file_path): continue
@@ -59,10 +60,14 @@ async def get_dashboard():
             data['timestamp'] = time.mktime(time.strptime(data['time'], "%Y-%m-%d %H:%M:%S"))
         if 'cpu-free' not in data: data['cpu-free'] = None
         if 'memory-free' not in data: data['memory-free'] = None
+        cuda_per_user = data.get('cuda_per_user', [])
+        if cuda_per_user:
+            cuda_per_user = [[row[0], mapping.get(row[1], row[1]), row[2]] for row in cuda_per_user]
         records.append(Record(host=data['host'], timestamp=data['timestamp'],
                               cpu=data['cpu'], memory=data['memory'],
                               cuda=data['cuda'], cuda_free=data['cuda-free'],
-                              user=None, cpu_free=data['cpu_free'], memory_free=data['memory_free']))
+                              user=None, cpu_free=data['cpu_free'], memory_free=data['memory_free'],
+                              cuda_per_user=cuda_per_user))
     return records
 
 
@@ -123,6 +128,9 @@ async def get_history(host: str, start: float, end: float):
     file_path = os.path.join(DATA_DIR, f'{host}.json')
     if host not in HOSTS or not os.path.exists(file_path): return []
     records = []
+    # 加载用户映射
+    mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
+
     # 1. 先用二分查找定位到“起点偏移”
     start_offset = __find_start_offset(file_path, start)
 
@@ -152,6 +160,11 @@ async def get_history(host: str, start: float, end: float):
                 # 如果超过 end，就可以停止整个循环
                 if ts > end:
                     break
+                
+                # 处理 cuda_per_user 字段
+                cuda_per_user = data.get('cuda_per_user', [])
+                if cuda_per_user:
+                    cuda_per_user = [[row[0], mapping.get(row[1], row[1]), row[2]] for row in cuda_per_user]
 
                 # ts 在 [start, end] 区间内，就 append 到结果
                 records.append(
@@ -165,6 +178,7 @@ async def get_history(host: str, start: float, end: float):
                         user=None,
                         cpu_free=data.get('cpu-free'),
                         memory_free=data.get('memory-free'),
+                        cuda_per_user=cuda_per_user,
                     )
                 )
             except Exception as e:

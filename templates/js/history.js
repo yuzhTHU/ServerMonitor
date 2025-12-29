@@ -64,7 +64,7 @@ async function fetchHistoryData() {
             100 * record.cuda_free[i] / (100 - record.cuda[i]) / 1024
         ) : 0)));
         cudaSeries[i] = {
-            name: `cuda:${i + 1}`,
+            name: `cuda:${i}`,
             type: 'line',
             stack: 'CUDA',
             areaStyle: {},
@@ -85,101 +85,212 @@ async function fetchHistoryData() {
     chart.setOption({
         // title: { text: host, left: 'center' },
         tooltip: {
-            trigger: 'axis',
+            trigger: 'axis', 
             axisPointer: { animation: false },
         },
         legend: {
-            data: ['CPU', 'Memory', ...cudaSeries.map(s => s.name)],
-            left: 10,
+            data: ['CPU', 'Memory', ...cudaSeries.map(s => s.name)], 
+            left: 10 
         },
-        toolbox: {
-            feature: {
-                dataZoom: { yAxisIndex: 'none' },
-                restore: {},
-                saveAsImage: {}
+        toolbox: { 
+            feature: { 
+                dataZoom: { yAxisIndex: 'none' }, 
+                restore: {}, 
+                saveAsImage: {} 
             }
         },
-        axisPointer: {
-            link: [ { xAxisIndex: 'all' } ]
+        axisPointer: { 
+            link: [ { xAxisIndex: 'all' } ] 
         },
-        dataZoom: [
-            {
-                show: true,
-                realtime: true,
-                start: 0,
+        dataZoom: [ 
+            { 
+                show: true, 
+                realtime: true, 
+                start: 0, 
                 end: 100,
-                xAxisIndex: [0, 1]
-            },
-            {
-                type: 'inside',
-                realtime: true,
-                start: 0,
+                xAxisIndex: [0, 1] 
+            }, 
+            { 
+                type: 'inside', 
+                realtime: true, 
+                start: 0, 
                 end: 100,
-                xAxisIndex: [0, 1]
+                xAxisIndex: [0, 1] 
             }
         ],
-        grid: [
+        grid: [ 
             {
                 left: 60,
                 right: 50,
+                height: '35%' 
+            }, 
+            { 
+                left: 60, 
+                right: 50, 
+                top: '55%', 
                 height: '35%'
-            },
-            {
-                left: 60,
-                right: 50,
-                top: '55%',
-                height: '35%'
-            }
-        ],
+             } 
+            ],
         xAxis: [
-            {
+            { 
                 type: 'category',
-                boundaryGap: false,
-                axisLine: { onZero: true },
-                data: labels
-            },
-            {
+                 boundaryGap: false, 
+                 axisLine: { onZero: true }, 
+                 data: labels 
+                },
+            { 
                 gridIndex: 1,
-                type: 'category',
-                boundaryGap: false,
-                axisLine: { onZero: true },
-                data: labels,
+                 type: 'category',
+                  boundaryGap: false, 
+                  axisLine: { onZero: true }, 
+                  data: labels,
             }
         ],
         yAxis: [
-            {
+            { 
                 name: '%',
-                type: 'value',
-                max: 100
+                type: 'value', 
+                max: 100 
             },
-            {
-                gridIndex: 1,
-                name: 'GiB',
-                type: 'value',
-                max: maxCudaMemory.toFixed(0),
+            { 
+                gridIndex: 1, 
+                name: 'GiB', 
+                type: 'value', 
+                max: maxCudaMemory > 0 ? maxCudaMemory.toFixed(0) : 10 
             }
         ],
         series: [
             {
                 name: 'CPU',
-                type: 'line',
-                symbolSize: 8,
+                type: 'line', 
+                symbolSize: 8, 
                 data: cpuData,
                 
             },
-            {
-                name: 'Memory',
-                type: 'line',
-                xAxisIndex: 0,
-                yAxisIndex: 0,
-                data: memData
+            { 
+                name: 'Memory', 
+                type: 'line', 
+                xAxisIndex: 0, 
+                yAxisIndex: 0, 
+                data: memData 
             },
-            ...cudaSeries.map(s => ({
+            ...cudaSeries.map(s => ({ 
                 ...s,
-                xAxisIndex: 1,
+                xAxisIndex: 1, 
                 yAxisIndex: 1,
             }))
 
+        ]
+    });
+
+
+    // --- 2. 新增：计算并渲染用户 GPU 使用统计图 ---
+    
+    // 数据结构: { username: { total_gib_h: 0.0, peak_gib: 0.0 } }
+    let userStats = {};
+
+    for (let i = 0; i < data.length; i++) {
+        let record = data[i];
+        
+        // 计算当前时刻每个用户的显存使用量 (GiB)
+        let currentStepUserUsage = {}; // user -> total_mem_at_this_moment (GiB)
+        
+        if (record.cuda_per_user) {
+            record.cuda_per_user.forEach(item => {
+                // item: [gpu_id, username, mem_mib]
+                let user = item[1];
+                let mem_mib = item[2];
+                if (!currentStepUserUsage[user]) currentStepUserUsage[user] = 0;
+                currentStepUserUsage[user] += mem_mib;
+            });
+        }
+
+        // 更新峰值和累积量
+        for (let user in currentStepUserUsage) {
+            let mem_gib = currentStepUserUsage[user] / 1024.0;
+            
+            if (!userStats[user]) userStats[user] = { total_gib_h: 0, peak_gib: 0 };
+            
+            // 更新峰值
+            if (mem_gib > userStats[user].peak_gib) {
+                userStats[user].peak_gib = mem_gib;
+            }
+
+            // 更新积分 (Total Usage = sum(mem * dt))
+            // 只有当不是最后一个点时，才能计算到下一个点的时间段
+            if (i < data.length - 1) {
+                let nextRecord = data[i+1];
+                let dt_hours = (nextRecord.timestamp - record.timestamp) / 3600.0;
+                // 简单的左矩形积分
+                userStats[user].total_gib_h += mem_gib * dt_hours;
+            }
+        }
+    }
+
+    // 转换为数组以便绘图
+    let userList = Object.keys(userStats);
+    // 过滤掉系统用户或使用量极小的用户 (可选)
+    userList = userList.filter(u => userStats[u].total_gib_h > 0.01 || userStats[u].peak_gib > 0.1);
+    // 按总用量排序
+    userList.sort((a, b) => userStats[b].total_gib_h - userStats[a].total_gib_h);
+
+    const users = userList;
+    const totalUsageData = userList.map(u => userStats[u].total_gib_h.toFixed(2));
+    const peakUsageData = userList.map(u => userStats[u].peak_gib.toFixed(2));
+
+    // 渲染 Bar Chart
+    const usageContainer = document.getElementById('user-usage-chart');
+    usageContainer.innerHTML = ''; // Clear previous
+    const usageChart = echarts.init(usageContainer);
+    
+    usageChart.setOption({
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'shadow' }
+        },
+        legend: {
+            data: ['总用量 (GiB·h)', '峰值显存 (GiB)']
+        },
+        grid: {
+            left: '3%',
+            right: '4%',
+            bottom: '3%',
+            containLabel: true
+        },
+        xAxis: {
+            type: 'category',
+            data: users,
+            axisLabel: { interval: 0, rotate: 30 }
+        },
+        yAxis: [
+            {
+                type: 'value',
+                name: '总用量 (GiB·h)',
+                position: 'left',
+                axisLine: { show: true, lineStyle: { color: '#5470C6' } }
+            },
+            {
+                type: 'value',
+                name: '峰值显存 (GiB)',
+                position: 'right',
+                axisLine: { show: true, lineStyle: { color: '#91CC75' } },
+                splitLine: { show: false }
+            }
+        ],
+        series: [
+            {
+                name: '总用量 (GiB·h)',
+                type: 'bar',
+                data: totalUsageData,
+                itemStyle: { color: '#5470C6' }
+            },
+            {
+                name: '峰值显存 (GiB)',
+                type: 'bar',
+                yAxisIndex: 1,
+                data: peakUsageData,
+                itemStyle: { color: '#91CC75' }
+            }
         ]
     });
 }
