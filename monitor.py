@@ -38,7 +38,7 @@ def monitor_server(host, server_config, interval=30, save_path='./data', patienc
                 record['host'] = host
                 with open(path, 'a') as f: 
                     f.write(json.dumps(record) + '\n')
-                logger.debug(' | '.join([f"{k}: {v}" for k, v in record.items()]))
+                # logger.debug(' | '.join([f"{k}: {v}" for k, v in record.items()]))
                 time.sleep(interval)
         except Exception as e:
             cnt -= 1

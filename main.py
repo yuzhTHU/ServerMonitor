@@ -367,11 +367,16 @@ async def get_server_info(host: str):
         frequency = {}
         for line in output.splitlines():
             k, v = line.split(':')
-            frequency[k.strip()] = float(v.strip())
+            frequency[k.strip()] = v.strip()
         freq = frequency.get('CPU MHz', 'N/A')
-        freq_min = frequency.get('CPU min MHz', 'N/A')
-        freq_max = frequency.get('CPU max MHz', 'N/A')
-        info["⏱️ CPU Frequency"] = f"{freq} MHz (min: {freq_min} MHz, max: {freq_max} MHz)"
+        if freq == 'N/A':
+            output2 = safe_exec_command(ssh, "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq").strip()
+            freq = int(output2) / 1024 # kHz -> MHz
+        else:
+            freq = float(freq)
+        freq_min = float(frequency.get('CPU min MHz', 'N/A'))
+        freq_max = float(frequency.get('CPU max MHz', 'N/A'))
+        info["⏱️ CPU Frequency"] = f"{freq:.2f} MHz (min={freq_min:.0f} MHz, max={freq_max:.0f} MHz)"
         # SIMD Support
         output = safe_exec_command(ssh, "grep '^flags' /proc/cpuinfo | head -n 1").strip()
         flags = set(output.split(':', 2)[1].split())
@@ -415,7 +420,7 @@ async def get_server_info(host: str):
         # Kernel Version
         info["🧱 Kernel Version"] = safe_exec_command(ssh, "uname -a").strip()
         # Conclude
-        max_len = max(map(len, info))
+        max_len = max(len(k) for k in info)
         content = '\n'.join([f"{k:{max_len}} : {v}" for k, v in info.items()])
         max_len = max(map(len, content.splitlines()))
         content = (
