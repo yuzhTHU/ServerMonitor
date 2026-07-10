@@ -15,5 +15,11 @@ mapping.json
 hosts.yml
 # 包含密码信息，不适合提交
 keys
+# 包含密码信息，不适合提交
+docker-compose.yml
+
 monitor-data.service
 monitor-web.service
+data.tar.gz
+debug.ipynb
+templates/**/*.todo.*

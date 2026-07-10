@@ -238,6 +238,12 @@ async function fetchHistoryData() {
     const totalUsageData = userList.map(u => userStats[u].total_gib_h.toFixed(2));
     const peakUsageData = userList.map(u => userStats[u].peak_gib.toFixed(2));
 
+    // [新增] 1. 准备饼图数据 (name/value 格式)
+    const pieData = userList.map((u, index) => ({
+        name: u,
+        value: parseFloat(totalUsageData[index])
+    }));
+
     // 渲染 Bar Chart
     const usageContainer = document.getElementById('user-usage-chart');
     usageContainer.innerHTML = ''; // Clear previous
@@ -246,14 +252,30 @@ async function fetchHistoryData() {
     usageChart.setOption({
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow' }
+            axisPointer: { type: 'shadow' },
+            // 使用 formatter 可以在鼠标悬停饼图时显示百分比
+            formatter: function (params) {
+                // 如果是数组（axis 触发，即柱状图），保持默认显示
+                if (Array.isArray(params)) {
+                    let res = params[0].name + '<br/>';
+                    params.forEach(item => {
+                        res += item.marker + item.seriesName + ': ' + item.value + '<br/>';
+                    });
+                    return res;
+                }
+                // 如果是对象（item 触发，即饼图）
+                else {
+                    return `${params.seriesName}<br/>${params.marker}${params.name}: ${params.value} GiB·h (${params.percent}%)`;
+                }
+            }
         },
         legend: {
-            data: ['总用量 (GiB·h)', '峰值显存 (GiB)']
+            data: ['总用量 (GiB·h)', '峰值显存 (GiB)'],
+            left: 'left'
         },
         grid: {
             left: '3%',
-            right: '4%',
+            right: '35%',
             bottom: '3%',
             containLabel: true
         },
@@ -273,6 +295,8 @@ async function fetchHistoryData() {
                 type: 'value',
                 name: '峰值显存 (GiB)',
                 position: 'right',
+                // 调整右侧 Y 轴的位置，使其紧贴柱状图边缘，而不是画布最右侧
+                offset: 0,
                 axisLine: { show: true, lineStyle: { color: '#91CC75' } },
                 splitLine: { show: false }
             }
@@ -290,6 +314,40 @@ async function fetchHistoryData() {
                 yAxisIndex: 1,
                 data: peakUsageData,
                 itemStyle: { color: '#91CC75' }
+            },
+            // [新增] 3. 添加饼图 Series
+            {
+                name: '用户占比',
+                type: 'pie',
+                // [关键点] center 控制位置：[x坐标, y坐标]
+                // 82% 处即为右侧空白区域的中心
+                center: ['82%', '50%'], 
+                radius: ['30%', '50%'], // 设为环形图看起来更现代，也可以设为 '50%' 做实心饼图
+                avoidLabelOverlap: true,
+                itemStyle: {
+                    borderRadius: 5,
+                    borderColor: '#fff',
+                    borderWidth: 1
+                },
+                label: {
+                    show: true,
+                    formatter: '{b}: {d}%', // 显示 用户名: 百分比
+                    minMargin: 5,
+                    edgeDistance: 10,
+                    lineHeight: 15,
+                },
+                emphasis: {
+                    label: {
+                        show: true,
+                        fontSize: 15,
+                        fontWeight: 'bold'
+                    }
+                },
+                // 只有鼠标悬停在饼图上时才触发 item tooltip
+                tooltip: {
+                    trigger: 'item'
+                },
+                data: pieData
             }
         ]
     });

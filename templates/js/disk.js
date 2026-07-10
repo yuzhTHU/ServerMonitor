@@ -23,7 +23,16 @@ async function InitContainer(hosts) {
 }
 
 async function DrawChart(host) {
-    const data = await fetch(`/api/disk?host=${host}`).then(response => response.json());
+    const response = await fetch(`/api/disk?host=${host}`);
+    if (!response.ok) {
+        console.warn(`跳过 ${host}: API 返回 ${response.status}`);
+        return;
+    }
+    const data = await response.json();
+    if (!data.length) {
+        console.warn(`跳过 ${host}: 无磁盘数据`);
+        return;
+    }
     const container = document.getElementById(`${host}-charts`);
     container.innerHTML = '';
     const showDisk = document.getElementById('show-disk');
@@ -151,7 +160,7 @@ async function InitDiskUsage() {
     const hosts = await fetch('/api/hosts').then(response => response.json());
     await InitContainer(hosts);
     await Promise.all(hosts.map(
-        host => DrawChart(host).catch(err => { console.error(`绘制 ${host.name} 时出错：`, err); })
+        host => DrawChart(host).catch(err => { console.error(`绘制 ${host} 时出错：`, err); })
     ));
 }
 

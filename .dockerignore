@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+monitor-data.service
+monitor-web.service
+__pycache__/
+*.pyc
+myenv/
+data.tar.gz
+data/
+log/
+debug.ipynb
+.ipynb_checkpoints/
+bak/

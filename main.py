@@ -11,6 +11,7 @@ import subprocess
 import pandas as pd
 from io import StringIO
 from logging import getLogger
+from datetime import datetime
 from src.logger import set_logger
 from typing import List, Union, Dict
 from fastapi import FastAPI, HTTPException, Query
@@ -58,8 +59,8 @@ async def get_dashboard():
         data = json.loads(read_last_line(file_path))
         if 'timestamp' not in data:
             data['timestamp'] = time.mktime(time.strptime(data['time'], "%Y-%m-%d %H:%M:%S"))
-        if 'cpu-free' not in data: data['cpu-free'] = None
-        if 'memory-free' not in data: data['memory-free'] = None
+        if 'cpu_free' not in data: data['cpu_free'] = None
+        if 'memory_free' not in data: data['memory_free'] = None
         cuda_per_user = data.get('cuda_per_user', [])
         if cuda_per_user:
             cuda_per_user = [[row[0], mapping.get(row[1], row[1]), row[2]] for row in cuda_per_user]
@@ -254,8 +255,12 @@ async def get_disk(host: str):
     # df = df.set_index('disk').sort_index()
 
     sftp = ssh.open_sftp()
-    with sftp.file('/var/monitor-disk-usage/202510.jsonl', 'r') as f:
-        raw_text = f.read().decode()
+    yyyymm = datetime.now().strftime("%Y%m")
+    try:
+        with sftp.file(f'/var/monitor-disk-usage/{yyyymm}.jsonl', 'r') as f:
+            raw_text = f.read().decode()
+    except FileNotFoundError:
+        return []
     df = pd.read_json(StringIO(raw_text), lines=True)
     df['disk'] = df['path'].str.rsplit('/', n=1).str[0]
     df['user'] = df['path'].str.rsplit('/', n=1).str[1]
