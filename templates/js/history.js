@@ -26,6 +26,7 @@ async function fetchHistoryData() {
     const end = new Date(endDate).getTime() / 1000 + 24 * 60 * 60 - 8 * 3600; // 结束日期加一天
     const response = await fetch(`/api/history?host=${host}&start=${start}&end=${end}`);
     const data = await response.json();
+    data.forEach(normalizeRecord);
 
     // 对数据进行排序
     data.sort((a, b) => a.timestamp - b.timestamp);

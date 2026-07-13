@@ -5,6 +5,7 @@ import json
 import pyotp
 import socket
 import dotenv
+import sqlite3
 import paramiko
 import traceback
 import subprocess
@@ -30,198 +31,129 @@ HOSTS = yaml.load(open('hosts.yml'), Loader=yaml.FullLoader)
 # 初始化 FastAPI 实例
 app = FastAPI(docs_url=None, redoc_url=None)
 
-# 数据模型
-class Record(BaseModel):
-    timestamp: float                # 时间戳
-    host: str                       # 主机名
-    user: Union[str, None]          # 用户名
-    cpu: float                      # CPU 使用率, 单位: %
-    memory: float                   # 内存使用率, 单位: %
-    cuda: List[float]               # CUDA 显存使用率, 单位: %
-    cpu_free: Union[float, None]    # CPU 剩余核数
-    memory_free: Union[float,None]  # 内存剩余量, 单位: MiB
-    cuda_free: Union[List[float], None] # CUDA 显存剩余量, 单位: MiB
-    cuda_per_user: Union[List[List[Union[str, int]]], None] = None # [gpu_id, username, memory_mib]
 
-def read_last_line(file_path, n=1):
-    if not os.path.exists(file_path): return None
-    return subprocess.check_output(['tail', '-n', str(n), file_path]).decode('utf-8')
+def _host_db_paths(host: str, reverse: bool = False):
+    """Return this host's (year, database path) pairs."""
+    host_dir = os.path.join(DATA_DIR, host)
+    if not os.path.isdir(host_dir):
+        return []
+
+    paths = []
+    for name in os.listdir(host_dir):
+        stem, ext = os.path.splitext(name)
+        if ext == '.db' and stem.isdigit():
+            paths.append((int(stem), os.path.join(host_dir, name)))
+    return sorted(paths, reverse=reverse)
+
+
+def _get_db(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _get_latest_snapshot(host: str):
+    for _, db_path in _host_db_paths(host, reverse=True):
+        conn = _get_db(db_path)
+        try:
+            row = conn.execute(
+                'SELECT * FROM snapshots WHERE host=? '
+                'ORDER BY timestamp DESC LIMIT 1',
+                (host,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is not None:
+            return row
+    return None
+
+
+def _row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    for key in ('gpu_usage_bytes', 'gpu_total_bytes',
+                'cpu_per_user', 'memory_per_user', 'gpu_per_user'):
+        d[key] = json.loads(d[key])
+    return d
 
 
 # 路由：获取所有服务器的最新数据
-@app.get("/api/dashboard", response_model=List[Record])
+@app.get("/api/dashboard")
 async def get_dashboard():
-    records = []
-    mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
+    rows = []
     for host in HOSTS:
-        file_path = os.path.join(DATA_DIR, f'{host}.json')
-        if not os.path.exists(file_path): continue
-        data = json.loads(read_last_line(file_path))
-        if 'timestamp' not in data:
-            data['timestamp'] = time.mktime(time.strptime(data['time'], "%Y-%m-%d %H:%M:%S"))
-        if 'cpu_free' not in data: data['cpu_free'] = None
-        if 'memory_free' not in data: data['memory_free'] = None
-        cuda_per_user = data.get('cuda_per_user', [])
-        if cuda_per_user:
-            cuda_per_user = [[row[0], mapping.get(row[1], row[1]), row[2]] for row in cuda_per_user]
-        records.append(Record(host=data['host'], timestamp=data['timestamp'],
-                              cpu=data['cpu'], memory=data['memory'],
-                              cuda=data['cuda'], cuda_free=data['cuda-free'],
-                              user=None, cpu_free=data['cpu_free'], memory_free=data['memory_free'],
-                              cuda_per_user=cuda_per_user))
-    return records
+        row = _get_latest_snapshot(host)
+        if row is not None:
+            rows.append(row)
+    return [_row_to_dict(r) for r in rows]
 
-
-def __get_timestamp_from_line(line: str) -> float:
-    """
-    从一行 JSON 字符串里提取 timestamp。如果没有 'timestamp' 字段，
-    就用 time.strptime + time.mktime 解析 'time' 字段。
-    """
-    data = json.loads(line)
-    if 'timestamp' not in data:
-        # 假设 time 格式都是 "%Y-%m-%d %H:%M:%S"
-        data['timestamp'] = time.mktime(time.strptime(data['time'], "%Y-%m-%d %H:%M:%S"))
-    return float(data['timestamp'])
-
-def __find_start_offset(file_path: str, start_ts: float) -> int:
-    """
-    在 sorted-by-timestamp 的文件里，使用二分查找来定位第一个 timestamp >= start_ts 的“附近”字节偏移。
-    返回值是一个 file.seek() 可以使用的字节偏移位置，我们会在此偏移再做一次 readline() 丢掉残行。
-    """
-    file_size = os.path.getsize(file_path)
-    low, high = 0, file_size
-    result_offset = 0
-
-    with open(file_path, 'r', encoding='utf-8') as f:
-        while low <= high:
-            mid = (low + high) // 2
-            f.seek(mid)
-
-            # 丢弃当前这一行的不完整部分
-            f.readline()
-            line = f.readline()
-            if not line:
-                # 如果 mid 已经靠近文件末尾，往前移动高位
-                high = mid - 1
-                continue
-
-            try:
-                ts = __get_timestamp_from_line(line)
-            except Exception:
-                # 如果 JSON 解析失败，就往后或往前稍微移动一点再试
-                # 这里简单起见，把 mid 往后调一点
-                low = mid + 1
-                continue
-
-            if ts < start_ts:
-                # 目标在文件后半段
-                low = mid + 1
-            else:
-                # ts >= start_ts，记住这个位置有可能是我们要的“起点”
-                result_offset = mid
-                high = mid - 1
-
-    return result_offset
 
 # 路由：获取指定服务器的历史数据
-@app.get("/api/history", response_model=List[Record])
+@app.get("/api/history")
 async def get_history(host: str, start: float, end: float):
-    file_path = os.path.join(DATA_DIR, f'{host}.json')
-    if host not in HOSTS or not os.path.exists(file_path): return []
-    records = []
-    # 加载用户映射
-    mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
+    if host not in HOSTS or start > end:
+        return []
 
-    # 1. 先用二分查找定位到“起点偏移”
-    start_offset = __find_start_offset(file_path, start)
-
-    with open(file_path, 'r', encoding='utf-8') as f:
-        # 2. 把文件指针移动到 start_offset 处，再丢掉这一行的不完整部分
-        f.seek(start_offset)
-        f.readline()
-
-        # 3. 从此处开始顺序读取，碰到 timestamp > end 就直接中止
-        for line in f:
-            try:
-                data = json.loads(line)
-
-                # 如果没有 'timestamp'，补充计算一下
-                if 'timestamp' not in data:
-                    data['timestamp'] = time.mktime(time.strptime(data['time'], "%Y-%m-%d %H:%M:%S"))
-                # 补齐可能缺失的字段
-                if 'cpu-free' not in data:      data['cpu-free'] = None
-                if 'memory-free' not in data:   data['memory-free'] = None
-
-                ts = float(data['timestamp'])
-
-                # 如果读到的记录还没到 start，直接跳过
-                if ts < start:
-                    continue
-
-                # 如果超过 end，就可以停止整个循环
-                if ts > end:
-                    break
-                
-                # 处理 cuda_per_user 字段
-                cuda_per_user = data.get('cuda_per_user', [])
-                if cuda_per_user:
-                    cuda_per_user = [[row[0], mapping.get(row[1], row[1]), row[2]] for row in cuda_per_user]
-
-                # ts 在 [start, end] 区间内，就 append 到结果
-                records.append(
-                    Record(
-                        host=host,
-                        timestamp=ts,
-                        cpu=data['cpu'],
-                        memory=data['memory'],
-                        cuda=data['cuda'],
-                        cuda_free=data.get('cuda-free'),
-                        user=None,
-                        cpu_free=data.get('cpu-free'),
-                        memory_free=data.get('memory-free'),
-                        cuda_per_user=cuda_per_user,
-                    )
-                )
-            except Exception as e:
-                # 如果某行解析失败，打印一下日志并跳过
-                logger.error(f"parse error: {e}  --  line: {line.strip()}")
-                continue
-
-    return records
+    start_ts, end_ts = int(start), int(end)
+    start_year = datetime.fromtimestamp(start_ts).year
+    end_year = datetime.fromtimestamp(end_ts).year
+    rows = []
+    for year, db_path in _host_db_paths(host):
+        if year < start_year or year > end_year:
+            continue
+        conn = _get_db(db_path)
+        try:
+            rows.extend(conn.execute('''
+                SELECT * FROM snapshots
+                WHERE host = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp
+            ''', (host, start_ts, end_ts)).fetchall())
+        finally:
+            conn.close()
+    return [_row_to_dict(r) for r in rows]
 
 # 路由：获取按用户汇总的资源使用情况
-@app.get("/api/summary", response_model=List[Record])
+@app.get("/api/summary")
 async def get_summary(host: str):
-    records = []
-    mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
-    file_path = os.path.join(DATA_DIR, f'{host}.json')
-    if host not in HOSTS or not os.path.exists(file_path):
+    if host not in HOSTS:
         return []
-    data = json.loads(read_last_line(file_path))
-    user2cpu = {}
-    for user, value in data['cpu_per_user']: user2cpu[user] = user2cpu.get(user, 0.0) + value
-    user2mem = {}
-    for user, value in data['memory_per_user']: user2mem[user] = user2mem.get(user, 0.0) + value
-    user2cuda = {}
-    for cuda, user, value in data['cuda_per_user']:
-        if user not in user2cuda: user2cuda[user] = [0.0] * len(data['cuda'])
-        user2cuda[user][int(cuda.removeprefix('cuda:'))] += value
-    users = set(user2cpu.keys()) | set(user2mem.keys()) | set(user2cuda.keys())
+    row = _get_latest_snapshot(host)
+
+    if row is None:
+        return []
+
+    d = _row_to_dict(row)
+    cpu_total = d['cpu_total_millicores']
+    mem_total = d['memory_total_bytes']
+
+    ignored_users = {
+        'www-data', 'root', 'nobody', 'messagebus', 'syslog',
+        'systemd-timesync', 'earlyoom', 'uuidd', 'colord', 'postfix', '_rpc',
+        'postgres', 'systemd-resolve', 'nvidia-persistenced',
+        'systemd-network', 'whoopsie', 'kernoops', 'systemd-oom',
+        'Debian-snmp', 'daemon', 'mas', 'libvirt-dnsmasq', 'rtkit', 'lp', 'avahi', 'zabbix', 'gdm',
+    }
+
+    users = (set(d['cpu_per_user'].keys())
+             | set(d['memory_per_user'].keys())
+             | set(d['gpu_per_user'].keys()))
+
+    result = []
     for user in users:
-        if user.startswith('PID'): continue # ignore unknown username
-        if user in [ # ignore system users
-            'www-data', 'root', 'nobody', 'messagebus', 'syslog', 
-            'systemd-timesync', 'earlyoom', 'uuidd', 'colord', 'postfix', '_rpc', 
-            'postgres', 'systemd-resolve', 'nvidia-persistenced', 
-            'systemd-network', 'whoopsie', 'kernoops', 'systemd-oom',
-            'Debian-snmp', 'daemon', 'mas', 'libvirt-dnsmasq', 'rtkit', 'lp', 'avahi', 'zabbix', 'gdm'
-        ]: continue
-        records.append(Record(host=host, timestamp=data['timestamp'],
-                                cpu=user2cpu.get(user, 0.0), memory=user2mem.get(user, 0.0),
-                                cuda=user2cuda.get(user, [0.0] * len(data['cuda'])), 
-                                cuda_free=None, user=mapping.get(user, user),
-                                cpu_free=None, memory_free=None))
-    return records
+        if user.startswith('PID') or user in ignored_users:
+            continue
+        user_cpu = d['cpu_per_user'].get(user, 0)
+        user_mem = d['memory_per_user'].get(user, 0)
+        user_gpus = d['gpu_per_user'].get(user, {})
+        user_gpu_bytes = {gid: user_gpus.get(gid, 0) for gid in d['gpu_total_bytes']}
+
+        result.append(dict(
+            host=host, timestamp=d['timestamp'], user=user,
+            cpu_usage_millicores=user_cpu, cpu_total_millicores=cpu_total,
+            memory_usage_bytes=user_mem, memory_total_bytes=mem_total,
+            gpu_usage_bytes=user_gpu_bytes, gpu_total_bytes=d['gpu_total_bytes'],
+            cpu_per_user={}, memory_per_user={}, gpu_per_user={},
+        ))
+    return result
 
 
 class DiskUsageRecord(BaseModel):
@@ -353,6 +285,15 @@ async def get_ip(host: str, secret: str):
     # hostname to IP
     ip = socket.gethostbyname(HOSTS[host]['hostname'])
     return ip
+
+
+# 路由：返回用户名映射
+@app.get("/api/mapping")
+async def get_mapping():
+    if os.path.exists('mapping.json'):
+        with open('mapping.json', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
 
 
 # 路由：返回支持的主机列表 (List[str])

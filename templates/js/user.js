@@ -37,7 +37,8 @@ async function fetchUserData() {
     hosts.forEach(async host => {
         const response = await fetch(`/api/summary?host=${host}`);
         let data = await response.json();
-        
+        data.forEach(normalizeRecord);
+
         const timestamp = data[0].timestamp;
         const time = document.getElementById(`summary-time-${host}`);
         time.innerHTML = `Last Update: ${formatTimestamp(timestamp)}`;

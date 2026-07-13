@@ -4,16 +4,22 @@ from ..ssh_connect import safe_exec_command
 def get_memory_stats(client):
     record = {}
     # 获取内存使用率和总内存
-    result = safe_exec_command(client, "free -m | awk 'NR==2{print $3/$2*100, $7}'")
-    record['memory'], record['memory_free'] = result.strip().split()
-    record['memory'], record['memory_free'] = float(record['memory']), float(record['memory_free'])
+    result = safe_exec_command(client, "grep MemTotal /proc/meminfo | awk '{print $2}'")
+    mem_total_bytes = int(result.strip()) * 1024
+    record['memory_total_bytes'] = mem_total_bytes
+
+    result = safe_exec_command(client, "grep MemAvailable /proc/meminfo | awk '{print $2}'")
+    mem_avail_bytes = int(result.strip()) * 1024
+    record['memory_usage_bytes'] = mem_total_bytes - mem_avail_bytes
 
     # 获取系统上各个用户的内存使用情况
-    result = safe_exec_command(client, "ps -eo user:100,%mem | awk 'NR > 1 {mem[$1] += $2} END {for (u in mem) print u, mem[u]}' | sort -k2 -nr")
-    record['memory_per_user'] = []
-    for line in result.splitlines():  # Skip the header
-        user, memory_usage = line.split()
-        record['memory_per_user'].append((user, float(memory_usage)))
-    # 应当有 sum(usage for user, usage in record['memory_per_user']) ~ record['memory']
+    result = safe_exec_command(client, "ps -eo user:100,rss | awk 'NR>1 {mem[$1]+=$2} END {for(u in mem) print u, mem[u]}'")
+    record['memory_per_user'] = {}
+    for line in result.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        user, rss_kb = line.rsplit(' ', 1) if ' ' in line else (line, '0')
+        record['memory_per_user'][user] = int(rss_kb) * 1024
 
     return record

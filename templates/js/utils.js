@@ -27,6 +27,46 @@ function colorInterpolate(value, red=0.85) {
     return a;
 }
 
+// ── 将后端原始数据 (millicores / bytes / dict) 映射为前端可直接使用的旧格式计算属性 ──
+function normalizeRecord(r) {
+    var GiB = 1073741824, MiB = 1048576;
+
+    // CPU
+    r.cpu = r.cpu_usage_millicores / r.cpu_total_millicores * 100;
+    r.cpu_free = (r.cpu_total_millicores - r.cpu_usage_millicores) / 1000;
+
+    // Memory
+    r.memory = r.memory_usage_bytes / r.memory_total_bytes * 100;
+    r.memory_free = (r.memory_total_bytes - r.memory_usage_bytes) / MiB;
+
+    // GPU arrays
+    var gids = Object.keys(r.gpu_total_bytes || {}).sort(function(a, b) {
+        return parseInt(a.split(':')[1]) - parseInt(b.split(':')[1]);
+    });
+    r.cuda = gids.map(function(id) {
+        var tb = r.gpu_total_bytes[id] || 0;
+        var ub = (r.gpu_usage_bytes || {})[id] || 0;
+        return tb > 0 ? ub / tb * 100 : 0;
+    });
+    r.cuda_free = gids.map(function(id) {
+        var tb = r.gpu_total_bytes[id] || 0;
+        var ub = (r.gpu_usage_bytes || {})[id] || 0;
+        return (tb - ub) / MiB;
+    });
+
+    // cuda_per_user: {user: {gpu_id: bytes}} → [[gpu_id, user, mem_mib], ...]
+    r.cuda_per_user = [];
+    var gpuPerUser = r.gpu_per_user || {};
+    for (var user in gpuPerUser) {
+        var gpus = gpuPerUser[user];
+        for (var gpuId in gpus) {
+            r.cuda_per_user.push([gpuId, user, Math.round(gpus[gpuId] / MiB)]);
+        }
+    }
+
+    return r;
+}
+
 // 自动反白
 function autoContrast(bg_color) {
     const [r, g, b] = bg_color.match(/\d+/g).map(Number);

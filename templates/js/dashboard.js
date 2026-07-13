@@ -1,6 +1,7 @@
 const timers = {}; // Object to store timer IDs for each card
 async function fetchDashboardData(init = false) {
     const records = await fetch('/api/dashboard').then(response => response.json());
+    records.forEach(normalizeRecord);
     const dashboardCards = document.getElementById('dashboardCards');
     if (init) { dashboardCards.innerHTML = ''; }
 

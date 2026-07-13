@@ -23,3 +23,5 @@ monitor-web.service
 data.tar.gz
 debug.ipynb
 templates/**/*.todo.*
+
+CLAUDE.md
