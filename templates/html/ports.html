@@ -4,15 +4,15 @@
             <div class="col-md-5">
                 <label for="hostSelect">选择服务器</label>
                 <select class="form-control" id="portsHostSelect" required>
-                    <option value="" disabled selected hidden>Select a Host</option>
+                    <option value="" disabled selected hidden>请选择服务器</option>
                 </select>
             </div>
             <div class="col-md-5">
-                <label for="portsSecretInput">输入访问秘钥</label>
-                <input type="password" class="form-control" id="portsSecretInput" placeholder="Enter your secret" required>
+                <label for="portsSecretInput">访问密钥</label>
+                <input type="password" class="form-control" id="portsSecretInput" placeholder="请输入访问密钥" required>
             </div>
             <div class="col-md-2">
-                <button type="submit" class="btn btn-primary">查询端口</button>
+                <button type="submit" class="btn btn-primary">查询端口信息</button>
             </div>
         </div>
     </form>
@@ -20,12 +20,12 @@
     <table class="table table-striped">
         <thead>
             <tr>
-                <th onclick="sortTable(this, 0)">Host</th>
-                <th onclick="sortTable(this, 1)">Listen</th>
-                <th onclick="sortTable(this, 2)">Port</th>
-                <th onclick="sortTable(this, 3)">User</th>
+                <th onclick="sortTable(this, 0)">服务器</th>
+                <th onclick="sortTable(this, 1)">监听地址</th>
+                <th onclick="sortTable(this, 2)">端口</th>
+                <th onclick="sortTable(this, 3)">用户</th>
                 <th onclick="sortTable(this, 4)">PID</th>
-                <th onclick="sortTable(this, 5)">Program</th>
+                <th onclick="sortTable(this, 5)">程序</th>
               </tr>
         </thead>
         <tbody id="portsTableBody">
@@ -45,6 +45,17 @@
     const fetchForm = document.getElementById('portsFetchForm');
     const tableBody = document.getElementById('portsTableBody');
 
+    function showPortsMessage(message, isError = false) {
+        tableBody.innerHTML = '';
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 6;
+        cell.className = `text-center py-4 ${isError ? 'text-danger' : 'text-muted'}`;
+        cell.textContent = message;
+        row.appendChild(cell);
+        tableBody.appendChild(row);
+    }
+
     // 初始化 hosts 列表
     fetch('/api/hosts')
         .then(response => response.json())
@@ -58,28 +69,37 @@
         });
 
     // 监听按钮事件
-    fetchForm.addEventListener('submit', function (event) {
+    fetchForm.addEventListener('submit', async function (event) {
         event.preventDefault();
         const host = hostSelect.value;
         const secret = secretInput.value;
-
-        fetch(`/api/ports?host=${encodeURIComponent(host)}&secret=${encodeURIComponent(secret)}`)
-            .then(response => response.json())
-            .then(records => {
-                tableBody.innerHTML = '';
-                records.forEach(record => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td>${record.host}</td>
-                        <td>${record.listen}</td>
-                        <td>${record.port}</td>
-                        <td>${record.user !== null ? record.user : '-'}</td>
-                        <td>${record.pid !== null ? record.pid : '-'}</td>
-                        <td>${record.program !== null ? record.program : '-'}</td>
-                    `;
-                    tableBody.appendChild(row);
-                });
+        showPortsMessage('正在查询端口信息…');
+        try {
+            const response = await fetch(`/api/ports?host=${encodeURIComponent(host)}&secret=${encodeURIComponent(secret)}`);
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(response.status === 401 ? '一次性验证码无效或已过期' : (payload.detail || `请求失败（HTTP ${response.status}）`));
+            }
+            tableBody.innerHTML = '';
+            if (!payload.length) {
+                showPortsMessage('未发现开放端口');
+                return;
+            }
+            payload.forEach(record => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${record.host}</td>
+                    <td>${record.listen}</td>
+                    <td>${record.port}</td>
+                    <td>${record.user !== null ? record.user : '-'}</td>
+                    <td>${record.pid !== null ? record.pid : '-'}</td>
+                    <td>${record.program !== null ? record.program : '-'}</td>
+                `;
+                tableBody.appendChild(row);
             });
+        } catch (error) {
+            showPortsMessage(error.message || '端口信息查询失败', true);
+        }
     });
 
     function sortTable(th, columnIndex) {
@@ -117,4 +137,3 @@
         sortedRows.forEach(row => tbody.appendChild(row));
     }
 </script>
-    

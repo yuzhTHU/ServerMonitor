@@ -1,18 +1,18 @@
 <div class="container">
     <div class="form-group row align-items-end">
         <div class="col-md-10">
-            <label for="iptableSecret">输入访问秘钥</label>
-            <input type="password" class="form-control" id="iptableSecret" placeholder="Enter your secret">
+            <label for="iptableSecret">访问密钥</label>
+            <input type="password" class="form-control" id="iptableSecret" placeholder="请输入访问密钥">
         </div>
         <div class="col-md-2">
-            <button id="refreshButton" class="btn btn-primary">查询IP</button>
+            <button id="refreshButton" class="btn btn-primary">查询 IP 地址</button>
         </div>
     </div>
 
     <table class="table table-striped">
         <thead>
             <tr>
-                <th>Host</th>
+                <th>服务器</th>
                 <th>IP</th>
             </tr>
         </thead>
@@ -23,38 +23,48 @@
 </div>
 <script>
     // document.addEventListener('DOMContentLoaded', function() {
-    function fetchIPRecords() {
-        console.log('Hello!');
+    async function fetchIPRecords() {
         const secret = document.getElementById('iptableSecret').value;
         const iptableBody = document.getElementById('iptableBody');
-        iptableBody.innerHTML = ''; // 清空表格内容
-
-        fetch('/api/hosts')
-            .then(response => response.json())
-            .then(hosts => {
-                hosts.forEach(host => {
-                    fetch(`/api/ip?host=${encodeURIComponent(host)}&secret=${encodeURIComponent(secret)}`)
-                        .then(response => response.json())
-                        .then(ip => {
-                            if (secret === '') {ip = '请输入秘钥'}
-                            else if (typeof ip === 'object' && ip != null) { ip = '秘钥错误' }
-                            const row = document.createElement('tr');
-                            row.innerHTML = `<td>${host}</td><td>${ip}</td>`;
-                            iptableBody.appendChild(row);
-                        })
-                        .catch(err => {
-                            const row = document.createElement('tr');
-                            row.innerHTML = `<td>${host}</td><td>获取IP失败</td>`;
-                            iptableBody.appendChild(row);
-                        });
-                    });
-            })
-            .catch(err => {
-                console.error('获取 hosts 失败:', err);
+        iptableBody.innerHTML = '';
+        if (!secret) {
+            iptableBody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-4">请输入一次性验证码后查询</td></tr>';
+            return;
+        }
+        try {
+            const hostsResponse = await fetch('/api/hosts');
+            if (!hostsResponse.ok) throw new Error('服务器列表加载失败');
+            const hosts = await hostsResponse.json();
+            iptableBody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-4">正在查询 IP 地址…</td></tr>';
+            const results = await Promise.all(hosts.map(async host => {
+                const response = await fetch(`/api/ip?host=${encodeURIComponent(host)}&secret=${encodeURIComponent(secret)}`);
+                const payload = await response.json();
+                if (!response.ok) {
+                    const message = response.status === 401
+                        ? '一次性验证码无效或已过期'
+                        : (payload.detail || `请求失败（HTTP ${response.status}）`);
+                    return { host, error: message };
+                }
+                return { host, ip: payload };
+            }));
+            iptableBody.innerHTML = '';
+            results.forEach(result => {
+                const row = document.createElement('tr');
+                const hostCell = document.createElement('td');
+                const valueCell = document.createElement('td');
+                hostCell.textContent = result.host;
+                valueCell.textContent = result.error || result.ip;
+                if (result.error) valueCell.classList.add('text-danger');
+                row.append(hostCell, valueCell);
+                iptableBody.appendChild(row);
             });
+        } catch (error) {
+            iptableBody.innerHTML = `<tr><td colspan="2" class="text-center text-danger py-4"></td></tr>`;
+            iptableBody.querySelector('td').textContent = error.message || 'IP 地址查询失败';
+        }
     }
 
-    // 初始加载
+    // 初始状态
     fetchIPRecords();
     // 刷新按钮
     document.getElementById('refreshButton').addEventListener('click', fetchIPRecords);

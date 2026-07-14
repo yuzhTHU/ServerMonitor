@@ -26,12 +26,19 @@ def ssh_connect(server_config):
 
 def safe_exec_command(client, command, timeout=60):
     stdin, stdout, stderr = client.exec_command(command)
-    
-    def read_output(out, result_holder):
-        result_holder.append(out.read().decode())
+
+    def read_output(out, result_holder, error_holder):
+        try:
+            # Remote command output may contain usernames or locale-dependent
+            # text that is not valid UTF-8. Preserve the response instead of
+            # letting a decoder exception disappear inside the worker thread.
+            result_holder.append(out.read().decode('utf-8', errors='replace'))
+        except Exception as exc:
+            error_holder.append(exc)
 
     result = []
-    thread = threading.Thread(target=read_output, args=(stdout, result))
+    errors = []
+    thread = threading.Thread(target=read_output, args=(stdout, result, errors))
     thread.start()
     thread.join(timeout=timeout)
 
@@ -39,4 +46,8 @@ def safe_exec_command(client, command, timeout=60):
         stdout.channel.close()  # 强制关闭channel
         thread.join()
         raise TimeoutError(f"Command timed out: {command}")
+    if errors:
+        raise RuntimeError(f"Failed to read command output: {errors[0]}") from errors[0]
+    if not result:
+        raise RuntimeError('Command output reader exited without a result')
     return result[0]

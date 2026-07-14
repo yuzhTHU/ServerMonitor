@@ -116,3 +116,15 @@ function resumeDiskCardOrder() {
         if (card) { container.appendChild(card); }
     });
 }
+
+function resumeFilesystemCardOrder() {
+    const container = document.getElementById('filesystem-cards');
+    if (!container) return;
+    const saved = JSON.parse(localStorage.getItem('CardOrder') || '[]');
+    if (!saved.length) return;
+
+    saved.forEach(id => {
+        const card = container.querySelector(`#filesystem-${id}`);
+        if (card?.parentElement) container.appendChild(card.parentElement);
+    });
+}

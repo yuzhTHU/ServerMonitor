@@ -9,6 +9,20 @@ body { display: flex; flex-direction: column; }
 #main {
     flex: 1;
 }
+
+#myTab { align-items: flex-end; }
+.admin-nav-start {
+    margin-left: auto;
+    padding-left: 1.1rem;
+    border-left: 1px solid #d8dee6;
+}
+.admin-nav-item .nav-link { color: #5f6c7b; }
+.admin-nav-item .nav-link:hover { color: #334155; }
+.admin-nav-item .nav-link.active { color: #212529; }
+@media (max-width: 767.98px) {
+    .admin-nav-start { padding-left: .65rem; }
+}
+
 h1#title {
     text-align: center;
     margin: 20px 0;
@@ -21,6 +35,42 @@ h1#title {
     min-width: 200px; 
     /* 设置每个卡片的最小宽度 */
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+.card-header-layout {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+.card-header-layout h5 { margin: 0; }
+.card-header-timestamp {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0 .35rem;
+    color: #8795a5;
+    line-height: 1.25;
+    text-align: right;
+}
+.dashboard-card-column { display: flex; }
+.dashboard-card {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+}
+.history-empty-state {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .55rem;
+    color: #8795a5;
+    text-align: center;
+}
+.history-empty-state-icon {
+    font-size: 2rem;
+    opacity: .55;
 }
 .hbar {
     height: 20px;
@@ -59,41 +109,114 @@ h1#title {
     color: #b2bec3;
     text-align: center;
 }
-.user-data-table-container {
-    margin-bottom: 10px;
-    background-color: #ffffff;
-    border-radius: 10px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    margin-bottom: 20px;
+.card-load-state {
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: #718096;
+    text-align: center;
 }
-.table-responsive {
+.card-load-spinner {
+    width: 34px;
+    height: 34px;
+    border: 3px solid rgba(13, 110, 253, 0.15);
+    border-top-color: #0d6efd;
+    border-radius: 50%;
+    animation: card-load-spin 0.75s linear infinite;
+}
+.card-load-state.is-error {
+    margin: 12px 0;
+    padding: 22px;
+    min-height: 126px;
+    color: #9b2c2c;
+    background: linear-gradient(135deg, #fff8f8, #fff1f1);
+    border: 1px solid rgba(220, 53, 69, 0.16);
+    border-radius: 12px;
+}
+.card-load-error-icon {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    background: #dc3545;
+    border-radius: 50%;
+    font-size: 1.1rem;
+    font-weight: 700;
+    box-shadow: 0 6px 16px rgba(220, 53, 69, 0.22);
+}
+.card-load-title { font-weight: 600; }
+.card-load-detail { max-width: 440px; color: #a05a5a; font-size: .84rem; }
+@keyframes card-load-spin { to { transform: rotate(360deg); } }
+.user-data-table-container {
+    margin-bottom: 20px;
+    overflow: hidden;
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    box-shadow: 0 6px 18px rgba(31, 45, 61, .08);
+}
+.user-data-table-container .card-body { padding: 1rem; }
+.user-data-table-container .table-responsive {
     overflow-x: auto;
     white-space: nowrap;
+    border: 1px solid #e5eaf0;
+    border-radius: 10px;
+    scrollbar-color: #9aa9b8 #edf1f5;
+    scrollbar-width: thin;
+}
+.user-data-table-container .table-responsive::-webkit-scrollbar { height: 9px; }
+.user-data-table-container .table-responsive::-webkit-scrollbar-track {
+    background: #edf1f5;
+    border-radius: 999px;
+}
+.user-data-table-container .table-responsive::-webkit-scrollbar-thumb {
+    background: #9aa9b8;
+    border-radius: 999px;
+    border: 2px solid #edf1f5;
+}
+.user-data-table {
+    margin: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-variant-numeric: tabular-nums;
 }
 .user-data-table th, .user-data-table td {
     white-space: nowrap;
-    background-color: #f4f4f4;
-    width: 100px; /* 固定每个单元格的宽度 */
-    border: none; /* 隐藏竖线 */
+    min-width: 108px;
+    padding: .78rem 1rem;
+    border: 0;
+    border-bottom: 1px solid #e7ecf2;
+    background: #fff;
     text-align: center;
 }
 .user-data-table th:first-child, .user-data-table td:first-child {
     position: sticky;
     left: 0;
+    min-width: 84px;
     font-weight: bold;
-    z-index: 2; /* 确保行索引在其他列上方 */
+    z-index: 2;
 }
-/* 美化表格的底色 */
-.table-bordered {
-    background-color: #f9f9f9;
-    border-collapse: collapse;
+.user-data-table tbody tr:nth-child(even) td { background: #f8fafc; }
+.user-data-table tbody tr:hover td { background: #eef6ff; }
+.user-data-table tbody tr:last-child td { border-bottom: 0; }
+.user-data-table tbody td:first-child {
+    color: #334155;
+    background: #f4f7fa;
 }
-/* 表头加深颜色，文字加粗 */
 .user-data-table thead th {
-    background-color: #2d3436;
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: #34424a;
     color: white;
-    font-weight: bold;
+    font-weight: 650;
+    letter-spacing: .01em;
 }
+.user-data-table thead th:first-child { z-index: 4; background: #2c383f; }
 
 
 #cardContainer.editable .card {

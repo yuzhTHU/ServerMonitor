@@ -6,7 +6,7 @@
     <title>FIB-Lab 服务器性能监控 - Server Monitor</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=20260714-19">
 </head>
 <body>
     <div class="container" id="main">
@@ -25,28 +25,38 @@
                     </button>
                 </li>
                 <li class="nav-item" role="presentation"> 
-                    <button class="nav-link" id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button" role="tab">
-                        历史数据
-                    </button>
-                </li>
-                <li class="nav-item" role="presentation"> 
                     <button class="nav-link" id="user-tab" data-bs-toggle="tab" data-bs-target="#user" type="button" role="tab">
-                        用户数据
+                        用户资源
                     </button>
                 </li>
-                <li class="nav-item" role="presentation"> 
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="filesystems-tab" data-bs-toggle="tab" data-bs-target="#filesystems" type="button" role="tab">
+                        磁盘空间
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="usage-tab" data-bs-toggle="tab" data-bs-target="#usage" type="button" role="tab">
+                        资源用量
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button" role="tab">
+                        历史趋势
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
                     <button class="nav-link" id="disk-tab" data-bs-toggle="tab" data-bs-target="#disk" type="button" role="tab">
-                        磁盘用量
+                        存储占用
                     </button>
                 </li>
-                <li class="nav-item" role="presentation"> 
+                <li class="nav-item admin-nav-item admin-nav-start" role="presentation">
                     <button class="nav-link" id="ports-tab" data-bs-toggle="tab" data-bs-target="#ports" type="button" role="tab">
-                        开放端口
+                        端口审计
                     </button>
                 </li>
-                <li class="nav-item" role="presentation"> 
+                <li class="nav-item admin-nav-item" role="presentation">
                     <button class="nav-link" id="iptable-tab" data-bs-toggle="tab" data-bs-target="#iptable" type="button" role="tab">
-                        IP地址
+                        主机地址
                     </button>
                 </li>
             </ul>
@@ -56,8 +66,10 @@
         <div class="row">
             <div class="tab-content col-12" id="myTabContent">
                 <div class="tab-pane fade show active" id="dashboard" role="tabpanel"> </div>
-                <div class="tab-pane fade" id="history" role="tabpanel"> </div>
                 <div class="tab-pane fade" id="user" role="tabpanel"> </div>
+                <div class="tab-pane fade" id="filesystems" role="tabpanel"> </div>
+                <div class="tab-pane fade" id="usage" role="tabpanel"> </div>
+                <div class="tab-pane fade" id="history" role="tabpanel"> </div>
                 <div class="tab-pane fade" id="disk" role="tabpanel"> </div>
                 <div class="tab-pane fade" id="ports" role="tabpanel"> </div>
                 <div class="tab-pane fade" id="iptable" role="tabpanel"> </div>
@@ -80,15 +92,17 @@
     <!-- Disk -->
     <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
     <!-- Utils -->
-    <script src="/js/utils.js"></script>
-    <script src="/js/drag.js"></script>
+    <script src="/js/utils.js?v=20260714-7"></script>
+    <script src="/js/drag.js?v=20260714-14"></script>
     
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             const tabMap = {
                 'dashboard': 'html/dashboard.html',
-                'history': 'html/history.html',
                 'user': 'html/user.html',
+                'filesystems': 'html/filesystems.html',
+                'usage': 'html/usage.html',
+                'history': 'html/history.html',
                 'disk': 'html/disk.html',
                 'ports': 'html/ports.html',
                 'iptable': 'html/iptable.html'
@@ -110,7 +124,7 @@
                 const tabContent = tabMap[tabId];
                 const container = document.getElementById(tabId);
                 if (!tabContent || container.dataset.loaded) return;
-                fetch(tabContent)
+                fetch(tabContent, { cache: 'no-cache' })
                     .then(res => res.text())
                     .then(html => {
                         container.innerHTML = html;

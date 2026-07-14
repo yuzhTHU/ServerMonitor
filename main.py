@@ -1,4 +1,7 @@
 import os
+import copy
+import heapq
+import queue
 import yaml
 import time
 import json
@@ -9,6 +12,7 @@ import sqlite3
 import paramiko
 import traceback
 import subprocess
+import threading
 import pandas as pd
 from io import StringIO
 from logging import getLogger
@@ -16,7 +20,7 @@ from datetime import datetime
 from src.logger import set_logger
 from typing import List, Union, Dict
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from src.ssh_connect import ssh_connect, safe_exec_command
 
@@ -27,6 +31,26 @@ logger = getLogger(f'my.web')
 # 获取数据文件路径
 DATA_DIR = './data'
 HOSTS = yaml.load(open('hosts.yml'), Loader=yaml.FullLoader)
+
+FILESYSTEM_CACHE_TTL = 20
+FILESYSTEM_CACHE = {}
+FILESYSTEM_LOCKS = {host: threading.Lock() for host in HOSTS}
+VIRTUAL_FILESYSTEM_TYPES = {
+    'autofs', 'binfmt_misc', 'cgroup', 'cgroup2', 'configfs', 'debugfs',
+    'devpts', 'devtmpfs', 'efivarfs', 'fusectl', 'hugetlbfs', 'mqueue',
+    'overlay', 'proc', 'pstore', 'ramfs', 'securityfs', 'squashfs',
+    'sysfs', 'tmpfs', 'tracefs', 'fuse.mergerfs',
+}
+HIDDEN_FILESYSTEM_MOUNTPOINTS = {'/boot', '/boot/efi', '/var/lib/docker'}
+
+HISTORY_IGNORED_USERS = {
+    'root', 'www-data', 'nobody', 'messagebus', 'syslog',
+    'systemd-timesync', 'earlyoom', 'uuidd', 'colord', 'postfix', '_rpc',
+    'postgres', 'systemd-resolve', 'nvidia-persistenced',
+    'systemd-network', 'whoopsie', 'kernoops', 'systemd-oom',
+    'debian-snmp', 'daemon', 'mas', 'libvirt-dnsmasq', 'rtkit', 'lp',
+    'avahi', 'zabbix', 'gdm',
+}
 
 # 初始化 FastAPI 实例
 app = FastAPI(docs_url=None, redoc_url=None)
@@ -46,8 +70,8 @@ def _host_db_paths(host: str, reverse: bool = False):
     return sorted(paths, reverse=reverse)
 
 
-def _get_db(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=30)
+def _get_db(db_path: str, check_same_thread: bool = True) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, timeout=30, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -76,9 +100,71 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     return d
 
 
+def _clean_usage_users(cpu_per_user: dict, memory_per_user: dict,
+                       gpu_per_user: dict, mapping: dict) -> dict:
+    """Convert one snapshot's per-user values to display units."""
+    users = set(cpu_per_user) | set(memory_per_user) | set(gpu_per_user)
+    result = {}
+    for raw_user in users:
+        user = raw_user.strip()
+        lower_user = user.lower()
+        if (not user or lower_user in HISTORY_IGNORED_USERS
+                or lower_user.startswith(('pid', 'eset'))):
+            continue
+        display_name = mapping.get(user, user)
+        values = result.setdefault(display_name, [0.0, 0.0, 0.0])
+        values[0] += cpu_per_user.get(raw_user, 0) / 1000
+        values[1] += memory_per_user.get(raw_user, 0) / 1073741824
+        values[2] += sum(gpu_per_user.get(raw_user, {}).values()) / 1073741824
+    return result
+
+
+def _iter_usage_rows(host: str, start_ts: int, end_ts: int):
+    """Yield a host's per-user snapshots in chronological order."""
+    start_year = datetime.fromtimestamp(start_ts).year
+    end_year = datetime.fromtimestamp(end_ts).year
+    for year, db_path in _host_db_paths(host):
+        if not start_year <= year <= end_year:
+            continue
+        conn = _get_db(db_path)
+        try:
+            cursor = conn.execute('''
+                SELECT timestamp, cpu_per_user, memory_per_user, gpu_per_user
+                FROM snapshots
+                WHERE host = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp
+            ''', (host, start_ts, end_ts))
+            for row in cursor:
+                yield row
+        finally:
+            conn.close()
+
+
+def _load_mapping() -> dict:
+    if not os.path.exists('mapping.json'):
+        return {}
+    with open('mapping.json', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _verify_totp(code: str) -> None:
+    """Validate a one-time password against the shared container secret."""
+    base32secret = os.getenv('TOTP_SECRET', '').strip()
+    if not base32secret:
+        logger.error('TOTP_SECRET is not configured')
+        raise HTTPException(status_code=500, detail='TOTP authentication is not configured')
+    try:
+        valid = pyotp.TOTP(base32secret, interval=30, digits=6).verify(
+            str(code).strip(), valid_window=2)
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise HTTPException(status_code=401, detail='Invalid TOTP code')
+
+
 # 路由：获取所有服务器的最新数据
 @app.get("/api/dashboard")
-async def get_dashboard():
+def get_dashboard():
     rows = []
     for host in HOSTS:
         row = _get_latest_snapshot(host)
@@ -89,31 +175,238 @@ async def get_dashboard():
 
 # 路由：获取指定服务器的历史数据
 @app.get("/api/history")
-async def get_history(host: str, start: float, end: float):
+def get_history(host: str, start: float, end: float):
     if host not in HOSTS or start > end:
-        return []
+        return StreamingResponse(iter(()), media_type='application/x-ndjson')
 
     start_ts, end_ts = int(start), int(end)
     start_year = datetime.fromtimestamp(start_ts).year
     end_year = datetime.fromtimestamp(end_ts).year
-    rows = []
-    for year, db_path in _host_db_paths(host):
-        if year < start_year or year > end_year:
-            continue
-        conn = _get_db(db_path)
-        try:
-            rows.extend(conn.execute('''
-                SELECT * FROM snapshots
-                WHERE host = ? AND timestamp >= ? AND timestamp <= ?
-                ORDER BY timestamp
-            ''', (host, start_ts, end_ts)).fetchall())
-        finally:
-            conn.close()
-    return [_row_to_dict(r) for r in rows]
+    db_paths = [
+        db_path for year, db_path in _host_db_paths(host)
+        if start_year <= year <= end_year
+    ]
+    def stream_rows():
+        for db_path in db_paths:
+            # StreamingResponse may advance a sync generator on different
+            # worker threads; batches themselves are still consumed serially.
+            conn = _get_db(db_path, check_same_thread=False)
+            try:
+                cursor = conn.execute('''
+                    SELECT timestamp,
+                           cpu_usage_millicores, cpu_total_millicores,
+                           memory_usage_bytes, memory_total_bytes,
+                           gpu_usage_bytes, gpu_total_bytes
+                    FROM snapshots
+                    WHERE host = ? AND timestamp >= ? AND timestamp <= ?
+                    ORDER BY timestamp
+                ''', (host, start_ts, end_ts))
+                while batch := cursor.fetchmany(1000):
+                    lines = []
+                    for row in batch:
+                        record = dict(row)
+                        for key in ('gpu_usage_bytes', 'gpu_total_bytes'):
+                            record[key] = json.loads(record[key])
+                        lines.append(json.dumps(record, ensure_ascii=False, separators=(',', ':')))
+                    yield '\n'.join(lines) + '\n'
+            finally:
+                conn.close()
+
+    return StreamingResponse(
+        stream_rows(),
+        media_type='application/x-ndjson',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+def _calculate_usage_stats(hosts: List[str], start: float, end: float,
+                           progress_callback=None):
+    """Aggregate per-user resource-hours and concurrent observed peaks."""
+    selected_hosts = list(dict.fromkeys(hosts))
+    invalid_hosts = [host for host in selected_hosts if host not in HOSTS]
+    if not selected_hosts or invalid_hosts or start > end:
+        raise HTTPException(status_code=400, detail='Invalid hosts or time range')
+
+    start_ts, end_ts = int(start), int(end)
+    mapping = _load_mapping()
+    max_sample_gap = 300
+    totals = {}
+    peaks = {}
+    current_global = {}
+    host_values = {}
+    host_timestamps = {}
+    expiry_heap = []
+    iterators = {}
+    row_heap = []
+    sample_count = 0
+    last_progress_report = time.monotonic()
+
+    def add_global(values_by_user: dict, direction: int):
+        for user, values in values_by_user.items():
+            current = current_global.setdefault(user, [0.0, 0.0, 0.0])
+            for index in range(3):
+                current[index] += direction * values[index]
+                if abs(current[index]) < 1e-12:
+                    current[index] = 0.0
+
+    def update_peaks():
+        for user, values in current_global.items():
+            peak = peaks.setdefault(user, [0.0, 0.0, 0.0])
+            for index in range(3):
+                peak[index] = max(peak[index], values[index])
+
+    def build_payload(progress: float, event_type: str):
+        users = set(totals) | set(peaks)
+        result = []
+        for user in users:
+            total = totals.get(user, [0.0, 0.0, 0.0])
+            peak = peaks.get(user, [0.0, 0.0, 0.0])
+            if max(total + peak) <= 0:
+                continue
+            result.append({
+                'user': user,
+                'cpu_core_hours': total[0],
+                'cpu_peak_cores': peak[0],
+                'memory_gib_hours': total[1],
+                'memory_peak_gib': peak[1],
+                'gpu_gib_hours': total[2],
+                'gpu_peak_gib': peak[2],
+            })
+        result.sort(key=lambda item: (
+            item['cpu_core_hours'] + item['memory_gib_hours']
+            + item['gpu_gib_hours']), reverse=True)
+        return {
+            'type': event_type,
+            'hosts': selected_hosts,
+            'start': start_ts,
+            'end': end_ts,
+            'progress': min(100, max(0, progress)),
+            'sample_count': sample_count,
+            'users': result,
+        }
+
+    try:
+        for host in selected_hosts:
+            iterator = iter(_iter_usage_rows(host, start_ts, end_ts))
+            iterators[host] = iterator
+            first = next(iterator, None)
+            if first is not None:
+                heapq.heappush(row_heap, (first['timestamp'], host, first))
+
+        while row_heap:
+            timestamp = row_heap[0][0]
+
+            while expiry_heap and expiry_heap[0][0] < timestamp:
+                _, expired_host, observed_at = heapq.heappop(expiry_heap)
+                if host_timestamps.get(expired_host) != observed_at:
+                    continue
+                add_global(host_values.get(expired_host, {}), -1)
+                host_values[expired_host] = {}
+
+            rows_at_timestamp = []
+            while row_heap and row_heap[0][0] == timestamp:
+                _, host, row = heapq.heappop(row_heap)
+                rows_at_timestamp.append((host, row))
+
+            for host, row in rows_at_timestamp:
+                values = _clean_usage_users(
+                    json.loads(row['cpu_per_user']),
+                    json.loads(row['memory_per_user']),
+                    json.loads(row['gpu_per_user']),
+                    mapping,
+                )
+                previous_timestamp = host_timestamps.get(host)
+                previous_values = host_values.get(host, {})
+                if previous_timestamp is not None:
+                    elapsed = timestamp - previous_timestamp
+                    if 0 < elapsed <= max_sample_gap:
+                        hours = elapsed / 3600
+                        for user, resource_values in previous_values.items():
+                            total = totals.setdefault(user, [0.0, 0.0, 0.0])
+                            for index in range(3):
+                                total[index] += resource_values[index] * hours
+
+                add_global(previous_values, -1)
+                add_global(values, 1)
+                host_values[host] = values
+                host_timestamps[host] = timestamp
+                heapq.heappush(
+                    expiry_heap, (timestamp + max_sample_gap, host, timestamp))
+                sample_count += 1
+
+                following = next(iterators[host], None)
+                if following is not None:
+                    heapq.heappush(
+                        row_heap, (following['timestamp'], host, following))
+
+            update_peaks()
+            now = time.monotonic()
+            if (progress_callback is not None
+                    and now - last_progress_report >= 1):
+                progress = ((timestamp - start_ts) / (end_ts - start_ts) * 100
+                            if end_ts > start_ts else 100)
+                progress_callback(build_payload(progress, 'progress'))
+                last_progress_report = now
+    finally:
+        for iterator in iterators.values():
+            close = getattr(iterator, 'close', None)
+            if close is not None:
+                close()
+
+    return build_payload(100, 'complete')
+
+
+@app.get('/api/usage_stats')
+def get_usage_stats(hosts: List[str] = Query(...), start: float = 0,
+                    end: float = 0):
+    """Stream current usage aggregates as newline-delimited JSON."""
+    selected_hosts = list(dict.fromkeys(hosts))
+    invalid_hosts = [host for host in selected_hosts if host not in HOSTS]
+    if not selected_hosts or invalid_hosts or start > end:
+        raise HTTPException(status_code=400, detail='Invalid hosts or time range')
+
+    def stream_results():
+        messages = queue.Queue(maxsize=2)
+        finished = object()
+
+        def calculate():
+            try:
+                result = _calculate_usage_stats(
+                    selected_hosts, start, end, messages.put)
+                messages.put(result)
+            except Exception as exc:
+                logger.exception('Usage statistics aggregation failed')
+                messages.put({
+                    'type': 'error',
+                    'detail': str(exc) or type(exc).__name__,
+                })
+            finally:
+                messages.put(finished)
+
+        worker = threading.Thread(target=calculate, daemon=True)
+        worker.start()
+        while True:
+            message = messages.get()
+            if message is finished:
+                break
+            yield json.dumps(
+                message, ensure_ascii=False, separators=(',', ':')) + '\n'
+
+    return StreamingResponse(
+        stream_results(),
+        media_type='application/x-ndjson',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 # 路由：获取按用户汇总的资源使用情况
 @app.get("/api/summary")
-async def get_summary(host: str):
+def get_summary(host: str):
     if host not in HOSTS:
         return []
     row = _get_latest_snapshot(host)
@@ -125,32 +418,37 @@ async def get_summary(host: str):
     cpu_total = d['cpu_total_millicores']
     mem_total = d['memory_total_bytes']
 
-    ignored_users = {
-        'www-data', 'root', 'nobody', 'messagebus', 'syslog',
-        'systemd-timesync', 'earlyoom', 'uuidd', 'colord', 'postfix', '_rpc',
-        'postgres', 'systemd-resolve', 'nvidia-persistenced',
-        'systemd-network', 'whoopsie', 'kernoops', 'systemd-oom',
-        'Debian-snmp', 'daemon', 'mas', 'libvirt-dnsmasq', 'rtkit', 'lp', 'avahi', 'zabbix', 'gdm',
-    }
-
     users = (set(d['cpu_per_user'].keys())
              | set(d['memory_per_user'].keys())
              | set(d['gpu_per_user'].keys()))
 
-    result = []
-    for user in users:
-        if user.startswith('PID') or user in ignored_users:
+    mapping = _load_mapping()
+    usage_by_name = {}
+    for raw_user in users:
+        user = raw_user.strip()
+        lower_user = user.lower()
+        if (not user or lower_user in HISTORY_IGNORED_USERS
+                or lower_user.startswith(('pid', 'eset'))):
             continue
-        user_cpu = d['cpu_per_user'].get(user, 0)
-        user_mem = d['memory_per_user'].get(user, 0)
-        user_gpus = d['gpu_per_user'].get(user, {})
-        user_gpu_bytes = {gid: user_gpus.get(gid, 0) for gid in d['gpu_total_bytes']}
 
+        display_name = mapping.get(user, user)
+        usage = usage_by_name.setdefault(display_name, {
+            'cpu': 0,
+            'memory': 0,
+            'gpu': {gpu_id: 0 for gpu_id in d['gpu_total_bytes']},
+        })
+        usage['cpu'] += d['cpu_per_user'].get(raw_user, 0)
+        usage['memory'] += d['memory_per_user'].get(raw_user, 0)
+        for gpu_id, value in d['gpu_per_user'].get(raw_user, {}).items():
+            usage['gpu'][gpu_id] = usage['gpu'].get(gpu_id, 0) + value
+
+    result = []
+    for user, usage in usage_by_name.items():
         result.append(dict(
             host=host, timestamp=d['timestamp'], user=user,
-            cpu_usage_millicores=user_cpu, cpu_total_millicores=cpu_total,
-            memory_usage_bytes=user_mem, memory_total_bytes=mem_total,
-            gpu_usage_bytes=user_gpu_bytes, gpu_total_bytes=d['gpu_total_bytes'],
+            cpu_usage_millicores=usage['cpu'], cpu_total_millicores=cpu_total,
+            memory_usage_bytes=usage['memory'], memory_total_bytes=mem_total,
+            gpu_usage_bytes=usage['gpu'], gpu_total_bytes=d['gpu_total_bytes'],
             cpu_per_user={}, memory_per_user={}, gpu_per_user={},
         ))
     return result
@@ -166,7 +464,7 @@ class DiskUsageRecord(BaseModel):
 
 # 路由：获取用户磁盘用量
 @app.get("/api/disk", response_model=List[DiskUsageRecord])
-async def get_disk(host: str):
+def get_disk(host: str):
     if host not in HOSTS:
         raise HTTPException(status_code=404, detail="Host not found")
     mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
@@ -228,57 +526,65 @@ class PortRecord(BaseModel):
 
 # 路由：获取开启的端口和开启端口的用户，需要验证用户的一次性密码 TOTP
 @app.get("/api/ports", response_model=List[PortRecord])
-async def get_ports(host: str, secret: str):
-    base32secret = os.getenv('TOTP_SECRET')
-    totp = pyotp.TOTP(base32secret, interval=30, digits=6)
-    if not totp.verify(secret, valid_window=2):
-        raise HTTPException(status_code=401, detail="Invalid TOTP secret")
+def get_ports(host: str, secret: str):
+    _verify_totp(secret)
 
     if host not in HOSTS:
         raise HTTPException(status_code=404, detail="Host not found")
     timestamp = time.time()
     mapping = json.load(open('mapping.json', encoding='utf-8')) if os.path.exists('mapping.json') else {}
 
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh = None
     try:
-        ssh.connect(**{**HOSTS[host], 'username': 'root', 'key_filename': '/home/yumeow/.ssh/LABNAS/id_rsa'})
+        server_config = copy.deepcopy(HOSTS[host])
+        server_config.update({
+            'username': 'root',
+            'key_filename': os.getenv(
+                'SSH_ROOT_KEY_PATH', '/root/.ssh/LABNAS/id_rsa'),
+        })
+        ssh = ssh_connect(server_config)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to host: {str(e)}")
+    try:
+        data = safe_exec_command(
+            ssh,
+            "ps -eo user:100,pid | awk 'NR > 1'",
+        )
+        pid2user = {}
+        for line in data.splitlines():
+            user, pid = line.split()
+            pid2user[pid] = user
 
-    _, stdout, _ = ssh.exec_command("ps -eo user:100,pid | awk 'NR > 1'")
-    pid2user = {}
-    for line in stdout.read().decode().splitlines():
-        user, pid = line.split()
-        pid2user[pid] = user
-
-    _, stdout, _ = ssh.exec_command("netstat -tunlp | awk 'NR > 2 {print $4, $7}' | sort | uniq")
-    data = stdout.read().decode()
-
-    result = []
-    for line in data.splitlines():
-        addr, detail = line.split(' ')
-        listen, port = addr.rsplit(':', 1)
-        if listen in ['127.0.0.1', '::']: listen = 'localhost'
-        port = int(port)
-        pid, program = detail.split('/', 1) if '/' in detail else (None, None)
-        user = pid2user.get(pid, f'PID{pid}' if pid else None)
-        pid = int(pid) if pid else None
-        result.append(PortRecord(host=host, timestamp=timestamp,
-                                 listen=listen, port=port,
-                                 user=mapping.get(user, user),
-                                 pid=pid, program=program))
-    return result
+        data = safe_exec_command(
+            ssh,
+            "netstat -tunlp | awk 'NR > 2 {print $4, $7}' | sort | uniq",
+        )
+        result = []
+        for line in data.splitlines():
+            fields = line.split(maxsplit=1)
+            if not fields:
+                continue
+            addr = fields[0]
+            detail = fields[1] if len(fields) > 1 else '-'
+            listen, port = addr.rsplit(':', 1)
+            if listen in ['127.0.0.1', '::']: listen = 'localhost'
+            port = int(port)
+            pid, program = detail.split('/', 1) if '/' in detail else (None, None)
+            user = pid2user.get(pid, f'PID{pid}' if pid else None)
+            pid = int(pid) if pid else None
+            result.append(PortRecord(host=host, timestamp=timestamp,
+                                     listen=listen, port=port,
+                                     user=mapping.get(user, user),
+                                     pid=pid, program=program))
+        return result
+    finally:
+        ssh.close()
 
 
 # 路由：返回服务器 IP
 @app.get("/api/ip")
-async def get_ip(host: str, secret: str):
-    with open('./keys/TOTP', 'r') as f:
-        base32secret = f.read().strip()
-    totp = pyotp.TOTP(base32secret, interval=30, digits=6)
-    if not totp.verify(secret, valid_window=2):
-        raise HTTPException(status_code=401, detail="Invalid TOTP secret")
+def get_ip(host: str, secret: str):
+    _verify_totp(secret)
 
     if host not in HOSTS:
         raise HTTPException(status_code=404, detail="Host not found")
@@ -289,7 +595,7 @@ async def get_ip(host: str, secret: str):
 
 # 路由：返回用户名映射
 @app.get("/api/mapping")
-async def get_mapping():
+def get_mapping():
     if os.path.exists('mapping.json'):
         with open('mapping.json', encoding='utf-8') as f:
             return json.load(f)
@@ -302,9 +608,94 @@ async def get_hosts():
     return list(HOSTS.keys())
 
 
+@app.get("/api/filesystems")
+def get_filesystems(host: str, refresh: bool = False):
+    if host not in HOSTS:
+        raise HTTPException(status_code=404, detail="Host not found")
+
+    cache_key = host
+    requested_at = time.monotonic()
+    cached = FILESYSTEM_CACHE.get(cache_key)
+    if cached and not refresh and requested_at - cached['created_at'] < FILESYSTEM_CACHE_TTL:
+        return cached['payload']
+
+    with FILESYSTEM_LOCKS[host]:
+        cached = FILESYSTEM_CACHE.get(cache_key)
+        if cached:
+            is_fresh = time.monotonic() - cached['created_at'] < FILESYSTEM_CACHE_TTL
+            refreshed_for_request = cached['created_at'] >= requested_at
+            if (not refresh and is_fresh) or refreshed_for_request:
+                return cached['payload']
+
+        ssh = None
+        try:
+            ssh = ssh_connect(copy.deepcopy(HOSTS[host]))
+            output = safe_exec_command(
+                ssh,
+                "LC_ALL=C timeout 8s df -B1 -PT 2>/dev/null",
+                timeout=12,
+            )
+            filesystems = []
+            for line in output.splitlines()[1:]:
+                fields = line.split(maxsplit=6)
+                if len(fields) != 7:
+                    continue
+                device, fs_type, total, used, available, _, mountpoint = fields
+                mountpoint = mountpoint.replace('\\040', ' ')
+                if (fs_type.lower() in VIRTUAL_FILESYSTEM_TYPES
+                        or mountpoint in HIDDEN_FILESYSTEM_MOUNTPOINTS):
+                    continue
+                try:
+                    total_bytes = int(total)
+                    used_bytes = int(used)
+                    available_bytes = int(available)
+                except ValueError:
+                    continue
+                if total_bytes <= 0:
+                    continue
+                usable_bytes = used_bytes + available_bytes
+                usage_percent = (used_bytes / usable_bytes * 100
+                                 if usable_bytes > 0 else 100)
+                filesystems.append({
+                    'device': device.replace('\\040', ' '),
+                    'filesystem_type': fs_type,
+                    'mountpoint': mountpoint,
+                    'total_bytes': total_bytes,
+                    'used_bytes': used_bytes,
+                    'available_bytes': available_bytes,
+                    'usage_percent': usage_percent,
+                })
+
+            if not filesystems:
+                raise RuntimeError("df did not return any usable filesystems")
+            payload = {
+                'host': host,
+                'timestamp': int(time.time()),
+                'filesystems': filesystems,
+            }
+            FILESYSTEM_CACHE[cache_key] = {
+                'created_at': time.monotonic(),
+                'payload': payload,
+            }
+            return payload
+        except TimeoutError as e:
+            raise HTTPException(status_code=504, detail=str(e)) from e
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("Failed to read filesystems from %s: %s", host, e)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to read filesystems: {e}",
+            ) from e
+        finally:
+            if ssh is not None:
+                ssh.close()
+
+
 # 路由：获取指定服务器的硬件/系统详情（通过 SSH 上传并执行 get_server_info.py）
 @app.get("/api/server_info", response_class=PlainTextResponse)
-async def get_server_info(host: str):
+def get_server_info(host: str):
     if host not in HOSTS:
         raise HTTPException(status_code=404, detail="Host not found")
     try:
@@ -402,7 +793,7 @@ async def get_server_info(host: str):
 
 # 路由：返回前端HTML页面
 @app.get("/", response_class=HTMLResponse)
-async def index():
+def index():
     with open("templates/index.html", encoding='utf-8') as f:
         return HTMLResponse(content=f.read())
 
@@ -423,7 +814,7 @@ async def get_js(filename: str):
 
 # 详情页 HTML
 @app.get("/server", response_class=HTMLResponse)
-async def server_page():
+def server_page():
     with open("templates/server.html", encoding='utf-8') as f:
         return HTMLResponse(content=f.read())
 

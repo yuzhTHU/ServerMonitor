@@ -1,0 +1,106 @@
+<style>
+    .filesystem-card { height: 100%; min-width: 0; margin: 0; }
+    .filesystem-card .card-body { min-width: 0; overflow: hidden; }
+    .filesystem-card .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+    .filesystem-card .card-title { margin: 0; font-weight: 700; }
+    .filesystem-time {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 0 .35rem;
+        text-align: right;
+        line-height: 1.25;
+    }
+    .filesystem-list { min-width: 0; display: grid; gap: 1.15rem; }
+    .filesystem-item { min-width: 0; }
+    .filesystem-heading {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: .75rem;
+        margin-bottom: .42rem;
+    }
+    .filesystem-mount {
+        min-width: 0;
+        overflow: hidden;
+        color: #2d3748;
+        font-size: .96rem;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .filesystem-percent { color: #657487; font-size: .82rem; font-weight: 650; }
+    .filesystem-progress {
+        width: 100%;
+        max-width: 100%;
+        height: .72rem;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #edf2f7;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, .07);
+        transition: width .3s ease;
+    }
+    .filesystem-progress-bar {
+        height: 100%;
+        min-width: 2px;
+        border-radius: inherit;
+        transition: width .35s ease;
+    }
+    .filesystem-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: .75rem;
+        margin-top: .38rem;
+        color: #8795a5;
+        font-size: .77rem;
+    }
+    .filesystem-device {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .filesystem-free { flex: 0 0 auto; color: #52606d; }
+</style>
+
+<div class="mt-3">
+    <div class="row align-items-end g-3 mb-4">
+        <div class="col-md-3">
+            <label for="filesystem-sort" class="form-label">排序依据</label>
+            <select id="filesystem-sort" class="form-control">
+                <option value="free-desc" selected>按剩余空间降序</option>
+                <option value="free-asc">按剩余空间升序</option>
+                <option value="usage-desc">按空间使用率降序</option>
+                <option value="mount">按挂载点名称</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label for="filesystem-color" class="form-label">着色依据</label>
+            <select id="filesystem-color" class="form-control">
+                <option value="usage" selected>依据空间使用率</option>
+                <option value="free-host">依据单台服务器内的剩余空间</option>
+                <option value="free-global">依据全部服务器的剩余空间</option>
+                <option value="free-absolute">依据绝对剩余空间（2 TiB 及以上视为充足）</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label for="filesystem-width" class="form-label">进度条显示比例</label>
+            <select id="filesystem-width" class="form-control">
+                <option value="uniform" selected>等宽显示</option>
+                <option value="size-host">依据单台服务器内的磁盘容量</option>
+                <option value="size-global">依据全部服务器的磁盘容量</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button id="fetch-filesystems" class="btn btn-primary">刷新数据</button>
+        </div>
+    </div>
+    <div id="filesystem-cards" class="row g-4"></div>
+</div>
+
+<script src="js/filesystems.js?v=20260714-16"></script>

@@ -1,23 +1,29 @@
 async function initUserData() {
     const hosts = await fetch('/api/hosts').then(response => response.json());
-    console.log(hosts);
     const summary = document.getElementById('user-summary');
     summary.innerHTML = '';
-    hosts.forEach(async host => {
+    hosts.forEach(host => {
         const container = `
             <div class="user-data-table-container" id="user-card-${host}">
-                <div class="card-header">
-                    <h5 class="card-title">${host}</h5>
+                <div class="card-header card-header-layout">
+                    <h5>${host}</h5>
+                    <small class="card-header-timestamp">
+                        <span id="summary-time-${host}"></span>
+                        <span id="summary-time-ago-${host}"></span>
+                    </small>
                 </div>
                 <div class="card-body">
-                    <div class="table-responsive" style="position: relative;">
-                        <table class="table table-bordered user-data-table" id="user-data-table-${host}">
-                            <thead id="table-head-${host}"></thead>
-                            <tbody id="table-body-${host}"></tbody>
-                        </table>
+                    <div class="card-load-state" id="user-state-${host}" role="status">
+                        <span class="card-load-spinner" aria-hidden="true"></span>
+                        <span class="card-load-title">正在加载用户数据</span>
                     </div>
-                    <div class="timestamp">
-                        <span id="summary-time-${host}">Last Update: ???</span> (<span id="summary-time-ago-${host}">- ago</span>)
+                    <div id="user-content-${host}" class="d-none">
+                        <div class="table-responsive" style="position: relative;">
+                            <table class="table table-bordered user-data-table" id="user-data-table-${host}">
+                                <thead id="table-head-${host}"></thead>
+                                <tbody id="table-body-${host}"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -26,27 +32,50 @@ async function initUserData() {
     });
 
     resumeUserCardOrder();
+    await fetchUserData(hosts);
 };
-initUserData();
 
 const summary_timers = {}; // Object to store timer IDs for each card
-async function fetchUserData() {
-    const hosts = await fetch('/api/hosts').then(response => response.json());
+function setUserCardState(host, state, detail = '') {
+    const status = document.getElementById(`user-state-${host}`);
+    const content = document.getElementById(`user-content-${host}`);
+    if (!status || !content) return;
+    if (state === 'success') {
+        status.classList.add('d-none');
+        content.classList.remove('d-none');
+        return;
+    }
+    if (summary_timers[host]) clearTimeout(summary_timers[host]);
+    document.getElementById(`summary-time-${host}`).textContent = '';
+    document.getElementById(`summary-time-ago-${host}`).textContent = '';
+    content.classList.add('d-none');
+    status.className = `card-load-state${state === 'error' ? ' is-error' : ''}`;
+    status.innerHTML = state === 'error'
+        ? `<span class="card-load-error-icon">!</span><span class="card-load-title">用户数据加载失败</span><span class="card-load-detail">${detail}</span>`
+        : '<span class="card-load-spinner" aria-hidden="true"></span><span class="card-load-title">正在加载用户数据</span>';
+}
+
+async function fetchUserData(existingHosts = null) {
+    const hosts = existingHosts || await fetch('/api/hosts').then(response => response.json());
     const sortBy = document.getElementById('sort-select').value;  // 获取下拉框的值
 
-    hosts.forEach(async host => {
+    await Promise.all(hosts.map(async host => {
+      setUserCardState(host, 'loading');
+      try {
         const response = await fetch(`/api/summary?host=${host}`);
+        if (!response.ok) throw new Error(`服务器返回 HTTP ${response.status}`);
         let data = await response.json();
+        if (!data.length) throw new Error('没有可显示的用户数据');
         data.forEach(normalizeRecord);
 
         const timestamp = data[0].timestamp;
         const time = document.getElementById(`summary-time-${host}`);
-        time.innerHTML = `Last Update: ${formatTimestamp(timestamp)}`;
+        time.textContent = `Last Update: ${formatTimestamp(timestamp)}`;
         if (summary_timers[host]) { clearTimeout(summary_timers[host]); }
         let count = 0; // 计数器
         const updateTimeAgo = () => {
             const lastUpdateElement = document.getElementById(`summary-time-ago-${host}`);
-            lastUpdateElement.innerHTML = getTimeAgo(timestamp);
+            lastUpdateElement.textContent = `(${getTimeAgo(timestamp)})`;
             count++;
             let delay = count < 60 ? 1000 : count < 120 ? 60000 : 3600000;
             summary_timers[host] = setTimeout(updateTimeAgo, delay);
@@ -69,7 +98,7 @@ async function fetchUserData() {
         
         // 构建表头
         tableHead.innerHTML = '';
-        let headerRow = '<tr><th>User</th>';
+        let headerRow = '<tr><th>资源</th>';
         data.forEach(record => {
             headerRow += `<th>${record.user}</th>`;
         });
@@ -82,7 +111,7 @@ async function fetchUserData() {
         resources.forEach(resource => {
             let name = 'N/A';
             if (resource === 'cpu') name = 'CPU';
-            if (resource === 'memory') name = 'MEM';
+            if (resource === 'memory') name = '内存';
             if (resource === 'cuda') name = 'GPU';
             let row = `<tr><td>${name}</td>`;
             data.forEach(record => {
@@ -108,7 +137,12 @@ async function fetchUserData() {
             row += '</tr>';
             tableBody.innerHTML += row;
         });
-    });
+        setUserCardState(host, 'success');
+      } catch (error) {
+        console.error(`加载 ${host} 用户数据时出错：`, error);
+        setUserCardState(host, 'error', error.message || '请稍后重试');
+      }
+    }));
 }
-document.getElementById('fetch-user-data').addEventListener('click', fetchUserData);
-fetchUserData()
+document.getElementById('fetch-user-data').addEventListener('click', () => fetchUserData());
+initUserData().catch(error => console.error('初始化用户数据时出错：', error));

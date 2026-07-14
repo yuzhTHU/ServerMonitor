@@ -1,18 +1,29 @@
 async function InitContainer(hosts) {
     const container = document.getElementById('disk-container');
+    container.querySelectorAll('[data-disk-charts]').forEach(chartsContainer => {
+        if (chartsContainer.diskResizeObserver) chartsContainer.diskResizeObserver.disconnect();
+        (chartsContainer.diskCharts || []).forEach(chart => chart.dispose());
+    });
     container.innerHTML = '';
     hosts.forEach(host => {
         const card = document.createElement('div');
         card.className = "card mx-0 shadow-sm mb-4";
         card.id = `disk-card-${host}`;
         card.innerHTML = `
-            <div class="card-header">
+            <div class="card-header card-header-layout">
                 <h5 class="fw-bold">${host}</h5>
+                <small class="card-header-timestamp">
+                    <span id="disk-time-${host}"></span>
+                    <span id="disk-time-ago-${host}"></span>
+                </small>
             </div>
             <div class="card-body">
-                <div class="row justify-content-center" id="${host}-charts"></div>
-                <div class="timestamp">
-                    <span id="disk-time-${host}">Last Update: ???</span> (<span id="disk-time-ago-${host}">??? ago</span>)
+                <div class="card-load-state" id="disk-state-${host}" role="status">
+                    <span class="card-load-spinner" aria-hidden="true"></span>
+                    <span class="card-load-title">正在加载磁盘数据</span>
+                </div>
+                <div id="disk-content-${host}" class="d-none">
+                    <div class="row justify-content-center" id="${host}-charts" data-disk-charts></div>
                 </div>
             </div>
         `;
@@ -22,23 +33,47 @@ async function InitContainer(hosts) {
     resumeDiskCardOrder();
 }
 
+function setDiskCardState(host, state, detail = '') {
+    const status = document.getElementById(`disk-state-${host}`);
+    const content = document.getElementById(`disk-content-${host}`);
+    if (!status || !content) return;
+    if (state === 'success') {
+        status.classList.add('d-none');
+        content.classList.remove('d-none');
+        return;
+    }
+    const time = document.getElementById(`disk-time-${host}`);
+    if (time.timer) clearTimeout(time.timer);
+    time.textContent = '';
+    document.getElementById(`disk-time-ago-${host}`).textContent = '';
+    content.classList.add('d-none');
+    status.className = `card-load-state${state === 'error' ? ' is-error' : ''}`;
+    status.innerHTML = state === 'error'
+        ? `<span class="card-load-error-icon">!</span><span class="card-load-title">磁盘数据加载失败</span><span class="card-load-detail">${detail}</span>`
+        : '<span class="card-load-spinner" aria-hidden="true"></span><span class="card-load-title">正在加载磁盘数据</span>';
+}
+
 async function DrawChart(host) {
+    setDiskCardState(host, 'loading');
     const response = await fetch(`/api/disk?host=${host}`);
     if (!response.ok) {
-        console.warn(`跳过 ${host}: API 返回 ${response.status}`);
-        return;
+        throw new Error(`服务器返回 HTTP ${response.status}`);
     }
     const data = await response.json();
     if (!data.length) {
-        console.warn(`跳过 ${host}: 无磁盘数据`);
-        return;
+        throw new Error('没有可显示的磁盘数据');
     }
+    setDiskCardState(host, 'success');
     const container = document.getElementById(`${host}-charts`);
+    if (container.diskResizeObserver) container.diskResizeObserver.disconnect();
+    (container.diskCharts || []).forEach(chart => chart.dispose());
     container.innerHTML = '';
+    const charts = [];
+    container.diskCharts = charts;
     const showDisk = document.getElementById('show-disk');
     const colorDisk = document.getElementById('color-disk');
 
-    const aggregate  = {"host":host, "time": data[0]["time"], "disk":'Total', "total": 0, "free": 0, "usage": {}};
+    const aggregate  = {"host":host, "time": data[0]["time"], "disk":'总计', "total": 0, "free": 0, "usage": {}};
     data.forEach(disk => {
         aggregate.total += disk.total;
         aggregate.free += disk.free;
@@ -70,7 +105,7 @@ async function DrawChart(host) {
         colDiv.className = 'chart-container col-md-4 mb-4';
 
         const chartDiv = document.createElement('div');
-        chartDiv.className = 'chart';
+        chartDiv.className = 'disk-chart';
 
         colDiv.appendChild(chartDiv);
         container.appendChild(colDiv);
@@ -89,7 +124,7 @@ async function DrawChart(host) {
         }));
         usageData = usageData.sort((a, b) => b.value - a.value);
         usageData.push({ 
-            name: 'Free',
+            name: '剩余空间',
             value: diskData.free,
             itemStyle: { color: '#ffeaa7' },
         });
@@ -107,10 +142,11 @@ async function DrawChart(host) {
         }
 
         const chart = echarts.init(chartDiv);
+        charts.push(chart);
         chart.setOption({
             title: { // 在中间显示加粗的标题（disk)
                 text: `${diskData.disk}`, textStyle: {fontSize: 28},
-                subtext: `${format_GB(diskData.free)} Free`, subtextStyle: {color: '#b2bec3'},
+                subtext: `可用 ${format_GB(diskData.free)}`, subtextStyle: {color: '#b2bec3'},
                 left: 'center', top: 'center',
                 target: 'blank', link: '/todo',
             },
@@ -142,25 +178,36 @@ async function DrawChart(host) {
         // 时间戳
         const timestamp = diskData.time;
         const time = document.getElementById(`disk-time-${host}`);
-        time.innerHTML = `Last Update: ${formatTimestamp(timestamp)}`;
+        time.textContent = `Last Update: ${formatTimestamp(timestamp)}`;
         if (time.timer) { clearTimeout(time.timer); }
         let count = 0; // 计数器
         const updateTimeAgo = () => {
             const lastUpdateElement = document.getElementById(`disk-time-ago-${host}`);
-            lastUpdateElement.innerHTML = getTimeAgo(timestamp);
+            lastUpdateElement.textContent = `(${getTimeAgo(timestamp)})`;
             count++;
             let delay = count < 60 ? 1000 : count < 120 ? 60000 : 3600000;
             time.timer = setTimeout(updateTimeAgo, delay);
         };
         updateTimeAgo();
     })
+
+    const resizeCharts = () => charts.forEach(chart => chart.resize());
+    if ('ResizeObserver' in window) {
+        const resizeObserver = new ResizeObserver(resizeCharts);
+        resizeObserver.observe(container);
+        container.diskResizeObserver = resizeObserver;
+    }
+    requestAnimationFrame(resizeCharts);
 }
 
 async function InitDiskUsage() {
     const hosts = await fetch('/api/hosts').then(response => response.json());
     await InitContainer(hosts);
     await Promise.all(hosts.map(
-        host => DrawChart(host).catch(err => { console.error(`绘制 ${host} 时出错：`, err); })
+        host => DrawChart(host).catch(error => {
+            console.error(`绘制 ${host} 时出错：`, error);
+            setDiskCardState(host, 'error', error.message || '请稍后重试');
+        })
     ));
 }
 

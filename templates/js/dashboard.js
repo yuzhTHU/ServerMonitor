@@ -1,125 +1,131 @@
-const timers = {}; // Object to store timer IDs for each card
-async function fetchDashboardData(init = false) {
-    const records = await fetch('/api/dashboard').then(response => response.json());
-    records.forEach(normalizeRecord);
-    const dashboardCards = document.getElementById('dashboardCards');
-    if (init) { dashboardCards.innerHTML = ''; }
+const timers = {};
+let dashboardHosts = [];
 
-    records.forEach(record => {
-        const cardId = record.host.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const formattedTimestamp = formatTimestamp(record.timestamp);
-        const timeAgo = getTimeAgo(record.timestamp);
+function dashboardCardId(host) {
+    return host.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+}
 
-        const mean_cuda = record.cuda ? record.cuda.reduce((s, i) => s + i, 0) / record.cuda.length : 0;
-        const sum_cuda = record.cuda_free ? record.cuda_free.reduce((s, i) => s + i, 0) : 0;
-
-        if (init) {
-            const card = document.createElement('div');
-            card.className = 'col-md-4';
-            card.innerHTML = `
-                <div class="card mx-0" id="card-${cardId}">
-                    <div class="card-header">
-                        <h5 class="card-title"><a href="/server?host=${encodeURIComponent(record.host)}" class="text-decoration-none">${record.host}</a></h5>
+function createDashboardCards(hosts) {
+    const container = document.getElementById('dashboardCards');
+    container.innerHTML = hosts.map(host => {
+        const cardId = dashboardCardId(host);
+        return `
+            <div class="col-md-4 col-12 dashboard-card-column">
+                <div class="card dashboard-card" id="card-${cardId}">
+                    <div class="card-header card-header-layout">
+                        <h5><a href="/server?host=${encodeURIComponent(host)}" class="text-decoration-none">${host}</a></h5>
+                        <small class="card-header-timestamp" id="dashboard-time-wrap-${cardId}">
+                            <span id="dashboard-time-${cardId}"></span>
+                            <span id="dashboard-time-ago-${cardId}"></span>
+                        </small>
                     </div>
                     <div class="card-body">
-                        <div class="cpu">
-                            <small><span>CPU: ${record.cpu.toFixed(0)}%</span></small>
-                            <small><span style="color: #b2bec3">(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)</span></small>
-                            <div id="card-CPU-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.cpu / 100)}; width: ${record.cpu}%;"></div>
+                        <div class="card-load-state" id="dashboard-state-${cardId}" role="status">
+                            <span class="card-load-spinner" aria-hidden="true"></span>
+                            <span class="card-load-title">正在加载服务器状态</span>
                         </div>
-                        <div class="mem">
-                            <small><span>MEM: ${record.memory.toFixed(0)}%</span></small>
-                            <small><span style="color: #b2bec3">(${(record.memory_free ? record.memory_free / 1024 : 0).toFixed(0)} GiB free)</span></small>
-                            <div id="card-MEM-hbar-${cardId}" class="hbar" style="background-color: ${colorInterpolate(record.memory / 100)}; width: ${record.memory}%;"></div>
-                        </div>
-                        <div class="cuda">
-                            <small><span>GPU: ${mean_cuda.toFixed(0)}%</span></small>
-                            <small><span style="color: #b2bec3">(${(sum_cuda / 1024).toFixed(0)} GiB free)</span></small>
-                            <div class="cuda-container">
-                                ${record.cuda ? record.cuda.map((usage, index) => {
-                const color = colorInterpolate(usage / 100);
-                return `
-                                        <div class="cuda-box" title="剩余显存 ${(record.cuda_free[index] / 1024).toFixed(2)} GiB" style="background-color: ${color};">
-                                            <span class="cuda-text" style="color: ${autoContrast(color)}">${(record.cuda_free[index] / 1024).toFixed(0)}</span>
-                                        </div>
-                                    `}
-            ).join('') : ''}
-                            </div>
-                        </div>
-                        <div class="timestamp">
-                            <span>Last Update: ${formattedTimestamp}</span> (<span>${timeAgo}</span>)
-                        </div>
+                        <div class="d-none" id="dashboard-content-${cardId}"></div>
                     </div>
                 </div>
-            `;
-            dashboardCards.appendChild(card);
-        } else {
-            const card = document.getElementById(`card-${cardId}`);
-
-            const cpu = card.getElementsByClassName('cpu')[0];
-            cpu.children[0].children[0].innerHTML = `CPU: ${record.cpu.toFixed(0)}%`;
-            cpu.children[1].children[0].innerHTML = `(${(record.cpu_free ? record.cpu_free : 0).toFixed(0)} Cores free)`;
-            cpu.children[2].style.width = `${record.cpu}%`;
-            cpu.children[2].style.backgroundColor = colorInterpolate(record.cpu / 100);
-
-            const mem = card.getElementsByClassName('mem')[0];
-            mem.children[0].children[0].innerHTML = `MEM: ${record.memory.toFixed(0)}%`;
-            mem.children[1].children[0].innerHTML = `(${(record.memory_free ? record.memory_free / 1024 : 0).toFixed(0)} GiB free)`;
-            mem.children[2].style.width = `${record.memory}%`;
-            mem.children[2].style.backgroundColor = colorInterpolate(record.memory / 100);
-
-            const cuda = card.getElementsByClassName('cuda')[0];
-            cuda.children[0].children[0].innerHTML = `GPU: ${mean_cuda.toFixed(0)}%`;
-            cuda.children[1].children[0].innerHTML = `(${(sum_cuda / 1024).toFixed(0)} GiB free)`;
-            record.cuda.forEach((usage, index) => {
-                const box = cuda.children[2].children[index];
-                const text = box.getElementsByTagName('span')[0];
-                const color = colorInterpolate(usage / 100);
-                const free = record.cuda_free[index] / 1024;
-                const total = free / (1 - usage / 100);
-                // box.title = `剩余显存 ${free.toFixed(2)} / ${total.toFixed(2)} GiB`;
-                box.title = `剩余显存 ${free.toFixed(2)} GiB`;
-                box.style.backgroundColor = color;
-                text.innerHTML = free.toFixed(0);
-                text.style.color = autoContrast(color);
-            });
-
-            const timestamp = card.getElementsByClassName('timestamp')[0];
-            timestamp.children[0].innerHTML = `Last Update: ${formattedTimestamp}`;
-            timestamp.children[1].innerHTML = timeAgo;
-        }
-
-        if (timers[cardId]) { clearTimeout(timers[cardId]); }
-
-        let count = 0; // 计数器
-        const updateTimeAgo = () => {
-            const card = document.getElementById(`card-${cardId}`);
-            card.getElementsByClassName('timestamp')[0].children[1].innerHTML = getTimeAgo(record.timestamp);
-
-            // 根据计数器决定下一个间隔
-            count++;
-            let delay = count < 60 ? 1000 : count < 120 ? 60000 : 3600000;
-            timers[cardId] = setTimeout(updateTimeAgo, delay);
-
-            // 超过5分钟未更新则标记为红色
-            const dt = Math.floor((Date.now() - record.timestamp * 1000) / 1000);
-            if (dt >= 5 * 60) {
-                card.style.borderColor = 'rgba(255, 0, 0, 1.0)';
-                card.getElementsByClassName('timestamp')[0].style.color = 'rgba(255, 0, 0, 1.0)';
-            } else {
-                card.style.borderColor = 'rgba(0, 0, 0, 0.1)';
-                card.getElementsByClassName('timestamp')[0].style.color = 'rgba(178, 190, 195, 1.0)';
-            }
-        };
-        updateTimeAgo();
-    });
-
+            </div>`;
+    }).join('');
     resumeDashboardCardOrder();
 }
 
-// 初始化时加载仪表盘数据
-fetchDashboardData(true);
-setInterval(fetchDashboardData, 60000);
+function setDashboardState(host, state, detail = '') {
+    const cardId = dashboardCardId(host);
+    const status = document.getElementById(`dashboard-state-${cardId}`);
+    const content = document.getElementById(`dashboard-content-${cardId}`);
+    if (!status || !content) return;
+    if (state === 'success') {
+        status.classList.add('d-none');
+        content.classList.remove('d-none');
+        return;
+    }
+    content.classList.add('d-none');
+    status.className = `card-load-state${state === 'error' ? ' is-error' : ''}`;
+    status.innerHTML = state === 'error'
+        ? `<span class="card-load-error-icon">!</span><span class="card-load-title">状态加载失败</span><span class="card-load-detail">${detail}</span>`
+        : '<span class="card-load-spinner" aria-hidden="true"></span><span class="card-load-title">正在加载服务器状态</span>';
+}
+
+function renderDashboardRecord(record) {
+    normalizeRecord(record);
+    const cardId = dashboardCardId(record.host);
+    const content = document.getElementById(`dashboard-content-${cardId}`);
+    if (!content) return;
+    const meanCuda = record.cuda.length ? record.cuda.reduce((sum, value) => sum + value, 0) / record.cuda.length : 0;
+    const sumCudaFree = record.cuda_free.reduce((sum, value) => sum + value, 0);
+    content.innerHTML = `
+        <div class="cpu">
+            <small>CPU: ${record.cpu.toFixed(0)}%</small>
+            <small style="color:#b2bec3">(${record.cpu_free.toFixed(0)} Cores free)</small>
+            <div class="hbar" style="background-color:${colorInterpolate(record.cpu / 100)};width:${record.cpu}%"></div>
+        </div>
+        <div class="mem">
+            <small>MEM: ${record.memory.toFixed(0)}%</small>
+            <small style="color:#b2bec3">(${(record.memory_free / 1024).toFixed(0)} GiB free)</small>
+            <div class="hbar" style="background-color:${colorInterpolate(record.memory / 100)};width:${record.memory}%"></div>
+        </div>
+        <div class="cuda">
+            <small>GPU: ${meanCuda.toFixed(0)}%</small>
+            <small style="color:#b2bec3">(${(sumCudaFree / 1024).toFixed(0)} GiB free)</small>
+            <div class="cuda-container">${record.cuda.map((usage, index) => {
+                const color = colorInterpolate(usage / 100);
+                const free = record.cuda_free[index] / 1024;
+                return `<div class="cuda-box" title="cuda:${index} 剩余显存 ${free.toFixed(2)} GiB" style="background-color:${color}"><span class="cuda-text" style="color:${autoContrast(color)}">${free.toFixed(0)}</span></div>`;
+            }).join('')}</div>
+        </div>`;
+    document.getElementById(`dashboard-time-${cardId}`).textContent = `Last Update: ${formatTimestamp(record.timestamp)}`;
+    setDashboardState(record.host, 'success');
+
+    if (timers[cardId]) clearTimeout(timers[cardId]);
+    const updateTimeAgo = () => {
+        const card = document.getElementById(`card-${cardId}`);
+        const timeWrap = document.getElementById(`dashboard-time-wrap-${cardId}`);
+        document.getElementById(`dashboard-time-ago-${cardId}`).textContent = `(${getTimeAgo(record.timestamp)})`;
+        const age = Math.max(0, Date.now() / 1000 - record.timestamp);
+        const stale = age >= 300;
+        card.style.borderColor = stale ? '#dc3545' : 'rgba(0,0,0,.1)';
+        timeWrap.style.color = stale ? '#dc3545' : '#8795a5';
+        timers[cardId] = setTimeout(updateTimeAgo, age < 60 ? 1000 : age < 3600 ? 60000 : 3600000);
+    };
+    updateTimeAgo();
+}
+
+async function fetchDashboardData() {
+    const response = await fetch('/api/dashboard');
+    if (!response.ok) throw new Error(`服务器返回 HTTP ${response.status}`);
+    const records = await response.json();
+    const returnedHosts = new Set(records.map(record => record.host));
+    records.forEach(renderDashboardRecord);
+    dashboardHosts.filter(host => !returnedHosts.has(host)).forEach(host => {
+        setDashboardState(host, 'error', '没有收到该服务器的监控数据');
+    });
+}
+
+async function initDashboard() {
+    const pageState = document.getElementById('dashboard-host-state');
+    try {
+        const response = await fetch('/api/hosts');
+        if (!response.ok) throw new Error(`服务器列表返回 HTTP ${response.status}`);
+        dashboardHosts = await response.json();
+        createDashboardCards(dashboardHosts);
+        pageState.classList.add('d-none');
+    } catch (error) {
+        pageState.className = 'card-load-state is-error';
+        pageState.innerHTML = `<span class="card-load-error-icon">!</span><span class="card-load-title">仪表盘加载失败</span><span class="card-load-detail">${error.message}</span>`;
+        return;
+    }
+    try {
+        await fetchDashboardData();
+    } catch (error) {
+        dashboardHosts.forEach(host => setDashboardState(host, 'error', error.message));
+    }
+}
+
+initDashboard();
+setInterval(() => fetchDashboardData().catch(error => console.error('刷新仪表盘失败：', error)), 60000);
 
 
 // 切换编辑模式
