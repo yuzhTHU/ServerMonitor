@@ -1,0 +1,11 @@
+server1:
+  hostname: server1.example.com
+  port: 22
+  username: monitor
+  allow_agent: true
+
+server2:
+  hostname: server2.example.com
+  port: 22
+  username: monitor
+  allow_agent: true

@@ -1,27 +1,38 @@
+# Python and editors
 __pycache__/
-*.pyc
-venv
-myenv
-.vscode
+*.py[cod]
+.venv/
+venv/
+myenv/
+.vscode/
+.ipynb_checkpoints/
+
+# Runtime data and local configuration
+data/
+log/
+bak/
+config/hosts.yml
+config/mapping.json
+unknown_mapping.json
+
+# Secrets and local overrides
 .env
+.env.*
+keys/
+*.pem
+*.key
+id_rsa*
+compose.override.yml
+docker-compose.override.yml
 
-log
-data
-bak
-
-# 包含用户名信息，不适合提交
-mapping.json 
-# 包含服务器信息，不适合提交
-hosts.yml
-# 包含密码信息，不适合提交
-keys
-# 包含密码信息，不适合提交
-docker-compose.yml
-
-monitor-data.service
-monitor-web.service
+# Local tooling and generated files
+playground/
 data.tar.gz
 debug.ipynb
-templates/**/*.todo.*
-
-CLAUDE.md
+monitor-data.service
+monitor-web.service
+src/web/templates/**/*.todo.*
+/CLAUDE.md
+/.claude/
+/.codex/
+/.agents/

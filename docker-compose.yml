@@ -1,0 +1,34 @@
+services:
+  monitor-data:
+    image: servermonitor:local
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: monitor-data
+    command: python collector.py
+    volumes:
+      - ./data:/app/data
+      - ./log:/app/log
+      - ./config:/app/config:ro
+      - ${HOME}/.ssh:/root/.ssh:ro
+    restart: always
+
+  monitor-web:
+    image: servermonitor:local
+    pull_policy: build
+    container_name: monitor-web
+    command: uvicorn web_server:app --host 0.0.0.0 --port 8000
+    environment:
+      TOTP_SECRET: ${TOTP_SECRET:-}
+      ADMIN_SSH_KEY_PATH: /run/secrets/servermonitor_admin_ssh_key
+    ports:
+      - "127.0.0.1:9805:8000"
+    volumes:
+      - ./data:/app/data
+      - ./log:/app/log
+      - ./config:/app/config:ro
+      - ${HOME}/.ssh:/root/.ssh:ro
+      # 启用“端口审计”时，取消下一行注释并修改宿主机私钥路径。
+      # - /path/to/admin/id_rsa:/run/secrets/servermonitor_admin_ssh_key:ro
+    restart: always

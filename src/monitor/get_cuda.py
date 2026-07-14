@@ -1,5 +1,6 @@
+# Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
 import json
-from ..ssh_connect import safe_exec_command
+from ..utils.ssh_connect import safe_exec_command
 
 
 def get_cuda_stats(client):
@@ -18,7 +19,7 @@ def get_cuda_stats(client):
     if 'Unable to determine the device handle for gpu' in result:
         valid = []
         for row in result.strip().split('\n'):
-            if 'Unable to determine the device handle for gpu' not in row: 
+            if 'Unable to determine the device handle for gpu' not in row:
                 valid.append(row.split(':')[0].split(' ')[1])
         valid_flag = ' --id=' + ','.join(valid) if valid else ''
     else:

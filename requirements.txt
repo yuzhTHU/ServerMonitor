@@ -1,0 +1,7 @@
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+pydantic==2.13.4
+paramiko==5.0.0
+pyotp==2.10.0
+PyYAML==6.0.3
+pandas==3.0.3

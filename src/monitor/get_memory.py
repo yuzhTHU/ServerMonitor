@@ -1,4 +1,5 @@
-from ..ssh_connect import safe_exec_command
+# Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
+from ..utils.ssh_connect import safe_exec_command
 
 
 def get_memory_stats(client):
